@@ -10,9 +10,70 @@ from app.core.database import get_db
 from app.models.camera import Camera, CctvRecording
 from app.services.cctv_engine import clospol_engine
 from app.services.onvif_service import clospol_onvif
+from app.services.scanner_service import network_scanner
 from app.core.security import get_current_user
 
 router = APIRouter(prefix="/cctv", tags=["Clospol CCTV"])
+
+class ScanRequest(BaseModel):
+    mode: str = "full"  # "full", "onvif", "subnet"
+    subnet_cidr: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+class ProbeDeviceRequest(BaseModel):
+    ip: str
+    port: Optional[int] = None
+    onvif_url: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+@router.get("/scanner/subnets")
+async def get_scanner_subnets(_: Dict[str, Any] = Depends(get_current_user)):
+    """Discovers host network interfaces and available subnets for CCTV scanning"""
+    subnets = network_scanner.get_local_subnets()
+    return {"subnets": subnets}
+
+@router.post("/scanner/scan")
+async def run_network_cctv_scan(payload: ScanRequest, _: Dict[str, Any] = Depends(get_current_user)):
+    """Runs high-performance ONVIF WS-Discovery and Subnet CCTV port scanner"""
+    try:
+        devices = await network_scanner.run_full_scan(
+            mode=payload.mode,
+            subnet_cidr=payload.subnet_cidr,
+            username=payload.username,
+            password=payload.password
+        )
+        return {
+            "status": "success",
+            "total_found": len(devices),
+            "devices": devices
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Pemindaian jaringan gagal: {e}")
+
+@router.post("/scanner/probe-device")
+async def probe_specific_device(payload: ProbeDeviceRequest, _: Dict[str, Any] = Depends(get_current_user)):
+    """Deep-probes a specific camera IP or ONVIF URL for stream & snapshot verification"""
+    target_url = payload.onvif_url or f"http://{payload.ip}:{payload.port or 80}/onvif/device_service"
+    try:
+        details = clospol_onvif.test_and_fetch_endpoints(
+            target_url,
+            username=payload.username,
+            password=payload.password
+        )
+        # Test RTSP stream candidate
+        is_stream_live = False
+        if details.get("rtsp_url"):
+            is_stream_live = clospol_engine.test_connection(details["rtsp_url"])
+        
+        details["is_stream_live"] = is_stream_live
+        return {
+            "status": "success",
+            "device": details
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Gagal memverifikasi kamera: {e}")
 
 class CameraCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)

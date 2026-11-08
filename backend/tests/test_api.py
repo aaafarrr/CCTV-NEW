@@ -1,6 +1,16 @@
 import os
 import sys
 import asyncio
+import tempfile
+
+# Use temporary database for test suite so production clospol.db is never polluted
+_test_db = os.path.join(tempfile.gettempdir(), "test_clospol_suite.db")
+if os.path.exists(_test_db):
+    try:
+        os.remove(_test_db)
+    except Exception:
+        pass
+os.environ["DATABASE_PATH"] = _test_db
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -64,6 +74,16 @@ async def run_suite():
         r_gallery = await client.get(f"/api/cctv/{cam_id}/gallery", headers=headers)
         assert r_gallery.status_code == 200
         assert "files" in r_gallery.json()
+
+        # 7. Test CCTV Network Discovery Scanner
+        r_subnets = await client.get("/api/cctv/scanner/subnets", headers=headers)
+        assert r_subnets.status_code == 200
+        assert "subnets" in r_subnets.json()
+        assert len(r_subnets.json()["subnets"]) >= 1
+
+        r_scan = await client.post("/api/cctv/scanner/scan", headers=headers, json={"mode": "onvif"})
+        assert r_scan.status_code == 200
+        assert "devices" in r_scan.json()
 
         print("ALL CLOSPOL CCTV & GOOGLE DRIVE TESTS PASSED SUCCESSFULLY!")
     clospol_engine.stop()

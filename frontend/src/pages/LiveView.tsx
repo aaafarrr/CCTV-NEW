@@ -19,6 +19,7 @@ import {
   Badge,
   Popconfirm,
   message,
+  Divider,
 } from 'antd';
 import {
   VideoCameraOutlined,
@@ -32,6 +33,11 @@ import {
   ExclamationCircleOutlined,
   ReloadOutlined,
   FullscreenOutlined,
+  RadarChartOutlined,
+  SearchOutlined,
+  ApiOutlined,
+  ThunderboltOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import { ENTERPRISE_TOKENS } from '../theme/enterpriseTheme';
 import { apiFetch } from '../utils/api';
@@ -66,6 +72,127 @@ export const LiveViewPage: React.FC = () => {
 
   // Playback Modal
   const [playbackFile, setPlaybackFile] = useState<any | null>(null);
+
+  // Network CCTV Scanner
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanMode, setScanMode] = useState<string>('full');
+  const [subnets, setSubnets] = useState<any[]>([]);
+  const [selectedSubnet, setSelectedSubnet] = useState<string>('');
+  const [scanUser, setScanUser] = useState('');
+  const [scanPass, setScanPass] = useState('');
+  const [discoveredDevices, setDiscoveredDevices] = useState<any[]>([]);
+  const [probingIp, setProbingIp] = useState<string | null>(null);
+
+  const fetchSubnets = async () => {
+    try {
+      const res = await apiFetch('/api/cctv/scanner/subnets');
+      if (res.ok) {
+        const data = await res.json();
+        setSubnets(data.subnets || []);
+        if (data.subnets && data.subnets.length > 0 && !selectedSubnet) {
+          const primary = data.subnets.find((s: any) => s.is_primary) || data.subnets[0];
+          setSelectedSubnet(primary.subnet_cidr);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const openScanner = () => {
+    setScannerOpen(true);
+    fetchSubnets();
+  };
+
+  const handleStartScan = async () => {
+    setScanning(true);
+    try {
+      const res = await apiFetch('/api/cctv/scanner/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: scanMode,
+          subnet_cidr: selectedSubnet || undefined,
+          username: scanUser.trim() || undefined,
+          password: scanPass || undefined,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDiscoveredDevices(data.devices || []);
+        if ((data.devices || []).length === 0) {
+          message.info('Tidak ada perangkat CCTV atau ONVIF terdeteksi pada rentang ini.');
+        } else {
+          message.success(`Ditemukan ${data.devices.length} perangkat CCTV aktif di jaringan!`);
+        }
+      } else {
+        const err = await res.json();
+        message.error(err.detail || 'Pemindaian gagal.');
+      }
+    } catch (e: any) {
+      message.error(e.message || 'Pemindaian gagal.');
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const handleProbeDiscovered = async (dev: any) => {
+    setProbingIp(dev.ip);
+    try {
+      const res = await apiFetch('/api/cctv/scanner/probe-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip: dev.ip,
+          port: dev.open_ports && dev.open_ports.length > 0 ? dev.open_ports[0] : 80,
+          onvif_url: dev.onvif_url || undefined,
+          username: scanUser.trim() || undefined,
+          password: scanPass || undefined,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const d = data.device;
+        message.success(`Koneksi terverifikasi! ${d.manufacturer || dev.brand} - RTSP live: ${d.is_stream_live ? 'ONLINE' : 'OFFLINE'}`);
+        setDiscoveredDevices((prev) =>
+          prev.map((item) =>
+            item.ip === dev.ip
+              ? {
+                  ...item,
+                  rtsp_url: d.rtsp_url || item.rtsp_url,
+                  snapshot_url: d.snapshot_url || item.snapshot_url,
+                  brand: d.manufacturer || item.brand,
+                  probed: true,
+                  is_stream_live: d.is_stream_live,
+                }
+              : item
+          )
+        );
+      } else {
+        const err = await res.json();
+        message.warning(err.detail || 'Kamera merespons tetapi verifikasi stream gagal.');
+      }
+    } catch (e: any) {
+      message.error(e.message || 'Uji koneksi gagal.');
+    } finally {
+      setProbingIp(null);
+    }
+  };
+
+  const handleImportToForm = (dev: any) => {
+    setIsEdit(false);
+    setEditId(null);
+    setCamName(dev.device_name || `Kamera ${dev.brand} (${dev.ip})`);
+    setCamStreamUrl(dev.rtsp_url || `rtsp://${dev.ip}:554/live/ch0`);
+    setCamSnapshotUrl(dev.snapshot_url || '');
+    setOnvifUrl(dev.onvif_url || `http://${dev.ip}:80/onvif/device_service`);
+    setOnvifUser(scanUser);
+    setOnvifPass(scanPass);
+    setScannerOpen(false);
+    setModalOpen(true);
+    message.info('Informasi kamera telah disalin ke formulir. Silakan verifikasi dan simpan.');
+  };
 
   const fetchCameras = async () => {
     try {
@@ -301,6 +428,12 @@ export const LiveViewPage: React.FC = () => {
           </Space>
 
           <Space wrap>
+            <Button
+              icon={<RadarChartOutlined style={{ color: ENTERPRISE_TOKENS.primaryColor }} />}
+              onClick={openScanner}
+            >
+              Pindai Jaringan (ONVIF & RTSP)
+            </Button>
             <Button
               type="primary"
               icon={<VideoCameraAddOutlined />}
@@ -557,6 +690,223 @@ export const LiveViewPage: React.FC = () => {
             </div>
           </div>
         )}
+      </Modal>
+      {/* Network CCTV Scanner Modal */}
+      <Modal
+        title={
+          <Space>
+            <RadarChartOutlined style={{ color: ENTERPRISE_TOKENS.primaryColor }} />
+            <span>Pemindaian Kamera CCTV di Jaringan (ONVIF & RTSP Discovery)</span>
+          </Space>
+        }
+        open={scannerOpen}
+        onCancel={() => setScannerOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setScannerOpen(false)}>
+            Tutup
+          </Button>,
+        ]}
+        width={920}
+      >
+        <Card size="small" style={{ background: '#f8fafc', marginBottom: 16 }}>
+          <Row gutter={[16, 12]} align="middle">
+            <Col xs={24} sm={8}>
+              <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
+                Subnet / IP Range Target:
+              </Text>
+              <Select
+                style={{ width: '100%' }}
+                value={selectedSubnet}
+                onChange={(val) => setSelectedSubnet(val)}
+                options={[
+                  ...subnets.map((s) => ({
+                    label: `${s.subnet_cidr} (${s.interface_ip}${s.is_primary ? ' - Utama' : ''})`,
+                    value: s.subnet_cidr,
+                  })),
+                  { label: 'Subnet 192.168.1.0/24', value: '192.168.1.0/24' },
+                  { label: 'Subnet 192.168.0.0/24', value: '192.168.0.0/24' },
+                  { label: 'Subnet 10.0.0.0/24', value: '10.0.0.0/24' },
+                ]}
+              />
+            </Col>
+
+            <Col xs={24} sm={8}>
+              <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
+                Metode Pemindaian:
+              </Text>
+              <Select
+                style={{ width: '100%' }}
+                value={scanMode}
+                onChange={(val) => setScanMode(val)}
+                options={[
+                  { label: 'Lengkap (ONVIF Multicast + Port Probe)', value: 'full' },
+                  { label: 'ONVIF WS-Discovery Saja (Port 3702)', value: 'onvif' },
+                  { label: 'Subnet Port Scanner (RTSP 554, HTTP 80/8080/8899)', value: 'subnet' },
+                ]}
+              />
+            </Col>
+
+            <Col xs={24} sm={8}>
+              <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
+                Aksi:
+              </Text>
+              <Button
+                type="primary"
+                icon={<SearchOutlined />}
+                loading={scanning}
+                onClick={handleStartScan}
+                style={{ width: '100%' }}
+              >
+                {scanning ? 'Memindai Jaringan...' : 'Mulai Pindai'}
+              </Button>
+            </Col>
+
+            <Col xs={12} sm={12}>
+              <Input
+                placeholder="Username CCTV (Opsional untuk auto-auth)"
+                value={scanUser}
+                onChange={(e) => setScanUser(e.target.value)}
+              />
+            </Col>
+
+            <Col xs={12} sm={12}>
+              <Input.Password
+                placeholder="Password CCTV (Opsional untuk auto-auth)"
+                value={scanPass}
+                onChange={(e) => setScanPass(e.target.value)}
+              />
+            </Col>
+          </Row>
+        </Card>
+
+        <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text strong>
+            Hasil Pemindaian ({discoveredDevices.length} Perangkat Ditemukan):
+          </Text>
+          {discoveredDevices.length > 0 && (
+            <Tag color="success">
+              <CheckCircleOutlined /> Pemindaian Selesai
+            </Tag>
+          )}
+        </div>
+
+        <Table
+          dataSource={discoveredDevices}
+          rowKey="ip"
+          size="small"
+          loading={scanning}
+          pagination={{ pageSize: 5 }}
+          locale={{
+            emptyText: scanning
+              ? 'Sedang mengirim paket WS-Discovery dan memindai port subnet...'
+              : 'Belum ada perangkat terdeteksi. Klik "Mulai Pindai" untuk mendeteksi kamera CCTV di jaringan Anda.',
+          }}
+          columns={[
+            {
+              title: 'IP & Port',
+              key: 'ip',
+              render: (_: any, r: any) => (
+                <div>
+                  <Text strong style={{ fontSize: 14 }}>
+                    {r.ip}
+                  </Text>
+                  <div style={{ marginTop: 4 }}>
+                    {(r.open_ports || []).map((p: number) => (
+                      <Tag key={p} color={p === 554 ? 'blue' : p === 80 || p === 8899 ? 'orange' : 'default'} style={{ fontSize: 11 }}>
+                        {p}
+                      </Tag>
+                    ))}
+                  </div>
+                </div>
+              ),
+            },
+            {
+              title: 'Brand & Tipe',
+              key: 'brand',
+              render: (_: any, r: any) => (
+                <Space direction="vertical" size={2}>
+                  <Tag
+                    color={
+                      r.brand?.includes('Hikvision')
+                        ? 'red'
+                        : r.brand?.includes('Dahua')
+                        ? 'orange'
+                        : r.brand?.includes('Tapo')
+                        ? 'green'
+                        : r.brand?.includes('Xiongmai')
+                        ? 'cyan'
+                        : 'geekblue'
+                    }
+                  >
+                    {r.brand || 'Generic CCTV'}
+                  </Tag>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {r.discovery_method || r.type}
+                  </Text>
+                </Space>
+              ),
+            },
+            {
+              title: 'Nama / Hardware',
+              dataIndex: 'device_name',
+              key: 'device_name',
+              render: (t: string, r: any) => (
+                <div>
+                  <Text strong>{t}</Text>
+                  {r.hardware && r.hardware !== t && (
+                    <div>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {r.hardware}
+                      </Text>
+                    </div>
+                  )}
+                </div>
+              ),
+            },
+            {
+              title: 'Stream RTSP Candidate',
+              key: 'rtsp_url',
+              render: (_: any, r: any) => (
+                <div>
+                  <span className="mono-text" style={{ fontSize: 11, wordBreak: 'break-all' }}>
+                    {r.rtsp_url}
+                  </span>
+                  {r.is_stream_live !== undefined && (
+                    <div style={{ marginTop: 2 }}>
+                      <Tag color={r.is_stream_live ? 'success' : 'error'} style={{ fontSize: 10 }}>
+                        {r.is_stream_live ? 'Stream Live OK' : 'Belum Terhubung'}
+                      </Tag>
+                    </div>
+                  )}
+                </div>
+              ),
+            },
+            {
+              title: 'Aksi',
+              key: 'action',
+              render: (_: any, r: any) => (
+                <Space>
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<PlusOutlined />}
+                    onClick={() => handleImportToForm(r)}
+                  >
+                    Tambah
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<ThunderboltOutlined />}
+                    loading={probingIp === r.ip}
+                    onClick={() => handleProbeDiscovered(r)}
+                  >
+                    Uji
+                  </Button>
+                </Space>
+              ),
+            },
+          ]}
+        />
       </Modal>
     </Space>
   );
