@@ -27,6 +27,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import { ENTERPRISE_TOKENS } from '../theme/enterpriseTheme';
+import { apiFetch } from '../utils/api';
 
 const { Title, Text } = Typography;
 
@@ -102,7 +103,7 @@ export const FaceGalleryPage: React.FC<FaceGalleryProps> = ({ onOpenSearch }) =>
   const handleUpdatePerson = async () => {
     if (!editingPerson) return;
     try {
-      const res = await fetch(`/api/v1/faces/people-clusters/${editingPerson.person_id}`, {
+      const res = await apiFetch(`/api/v1/faces/people-clusters/${editingPerson.person_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -122,7 +123,7 @@ export const FaceGalleryPage: React.FC<FaceGalleryProps> = ({ onOpenSearch }) =>
 
   const handleDeletePerson = async (personId: string) => {
     try {
-      const res = await fetch(`/api/v1/faces/people-clusters/${personId}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/v1/faces/people-clusters/${personId}`, { method: 'DELETE' });
       if (res.ok) {
         message.success('Identitas dihapus dari SQL & Qdrant');
         fetchClusters();
@@ -323,3 +324,4 @@ export const FaceGalleryPage: React.FC<FaceGalleryProps> = ({ onOpenSearch }) =>
     </Space>
   );
 };
+

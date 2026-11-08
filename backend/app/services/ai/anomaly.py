@@ -5,8 +5,15 @@ from typing import List, Dict, Any
 logger = logging.getLogger("cctv_new.ai.anomaly")
 
 class BehaviorAnomalyEngine:
+    """
+    Behavioral Anomaly Engine:
+    - Intrusion Detection (Restricted Polygon ROI)
+    - Loitering Detection (Dwell time threshold)
+    - Fall Detection (Posture aspect-ratio collapse - Ref: DeepCamera)
+    """
     def __init__(self):
         self.zone_dwell_tracker: Dict[str, Dict[int, Dict[str, Any]]] = {}
+        self.prev_aspect_ratios: Dict[str, Dict[int, float]] = {}
         self.alert_cooldown: Dict[str, float] = {}
 
     def _parse_pt(self, pt: Any) -> List[int]:
@@ -26,11 +33,39 @@ class BehaviorAnomalyEngine:
         alerts: List[Dict[str, Any]] = []
         current_time = time.time()
         dwell_tracker = self.zone_dwell_tracker.setdefault(camera_id, {})
+        aspect_history = self.prev_aspect_ratios.setdefault(camera_id, {})
 
         for obj in detections:
             track_id = obj["id"]
             center = self._parse_pt(obj["center"])
             obj_class = obj["class_name"]
+            bbox = obj.get("bbox", [0, 0, 10, 10])
+            w = max(1, bbox[2] - bbox[0])
+            h = max(1, bbox[3] - bbox[1])
+            aspect = h / float(w)
+
+            # DeepCamera Skill: Fall Detection (upright person suddenly collapses horizontally)
+            prev_asp = aspect_history.get(track_id)
+            aspect_history[track_id] = aspect
+            if prev_asp and prev_asp > 1.25 and aspect < 0.72 and center[1] > 230:
+                fall_key = f"{camera_id}_{track_id}_fall"
+                if current_time - self.alert_cooldown.get(fall_key, 0) > 30.0:
+                    self.alert_cooldown[fall_key] = current_time
+                    time_str = time.strftime("%H:%M:%S")
+                    alerts.append({
+                        "event_type": "FALL_DETECTED",
+                        "severity": "CRITICAL",
+                        "camera_id": camera_id,
+                        "camera_name": camera_name,
+                        "description": f"Darurat Medis / Keamanan (Fall Detection): Subjek #{track_id} terdeteksi terjatuh di lantai!",
+                        "ai_summary": f"[AI Ringkasan • DeepCamera Skill] Subjek #{track_id} mengalami perubahan rasio postur vertikal ke horizontal secara mendadak ({prev_asp:.2f} -> {aspect:.2f}) di {camera_name} pukul {time_str}. Segera kirim bantuan medis/petugas.",
+                        "metadata": {
+                            "track_id": track_id,
+                            "prev_aspect": round(prev_asp, 2),
+                            "curr_aspect": round(aspect, 2),
+                            "bbox": bbox
+                        }
+                    })
 
             for zone in roi_zones:
                 zone_id = zone.get("id", "default_zone")
@@ -58,7 +93,7 @@ class BehaviorAnomalyEngine:
                                     "track_id": track_id,
                                     "class_name": obj_class,
                                     "zone_name": zone_name,
-                                    "bbox": obj["bbox"]
+                                    "bbox": bbox
                                 }
                             })
                     elif zone_type == "LOITERING":
@@ -83,7 +118,7 @@ class BehaviorAnomalyEngine:
                                             "track_id": track_id,
                                             "dwell_seconds": int(dwell_duration),
                                             "zone_name": zone_name,
-                                            "bbox": obj["bbox"]
+                                            "bbox": bbox
                                         }
                                     })
                 else:

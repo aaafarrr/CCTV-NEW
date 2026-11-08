@@ -215,3 +215,4 @@ class FaceSearchService:
         }
 
 face_search_service = FaceSearchService()
+

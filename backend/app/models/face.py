@@ -32,3 +32,4 @@ class FaceDetectionLog(Base):
     bounding_box = Column(JSON, default=dict)
 
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+

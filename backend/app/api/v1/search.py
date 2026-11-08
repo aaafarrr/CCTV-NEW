@@ -39,3 +39,4 @@ async def register_identity(
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Gagal mendaftarkan identitas: {str(e)}")
+

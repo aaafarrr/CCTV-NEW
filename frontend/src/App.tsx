@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ConfigProvider,
   Layout,
@@ -12,6 +12,8 @@ import {
   Popover,
   List,
   Avatar,
+  Tooltip,
+  message,
 } from 'antd';
 import {
   DashboardOutlined,
@@ -26,6 +28,8 @@ import {
   UserOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  SoundOutlined,
+  AudioMutedOutlined,
 } from '@ant-design/icons';
 import { enterpriseAntdTheme, ENTERPRISE_TOKENS } from './theme/enterpriseTheme';
 import { LoginPage } from './pages/LoginPage';
@@ -36,6 +40,7 @@ import { EventsPage } from './pages/EventsPage';
 import { StorageSyncPage } from './pages/StorageSyncPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { FaceSearchDrawer } from './components/FaceSearchDrawer';
+import { apiFetch, playEmergencySiren } from './utils/api';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -60,11 +65,28 @@ export function App() {
   const [faceSearchOpen, setFaceSearchOpen] = useState<boolean>(false);
   const [targetEditCamId, setTargetEditCamId] = useState<string | null>(null);
   const [recentAlerts, setRecentAlerts] = useState<any[]>([]);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const lastAlertIdRef = useRef<string | null>(null);
 
   const fetchBellAlerts = async () => {
     try {
-      const res = await fetch('/api/v1/alerts?limit=5');
-      if (res.ok) setRecentAlerts(await res.json());
+      const res = await apiFetch('/api/v1/alerts?limit=5');
+      if (res.ok) {
+        const data = await res.json();
+        setRecentAlerts(data);
+        if (data.length > 0) {
+          const newest = data[0];
+          if (
+            lastAlertIdRef.current &&
+            lastAlertIdRef.current !== newest.id &&
+            newest.severity === 'CRITICAL' &&
+            soundEnabled
+          ) {
+            playEmergencySiren();
+          }
+          lastAlertIdRef.current = newest.id;
+        }
+      }
     } catch {
       // ignore
     }
@@ -73,10 +95,10 @@ export function App() {
   useEffect(() => {
     if (user) {
       fetchBellAlerts();
-      const timer = setInterval(fetchBellAlerts, 8000);
+      const timer = setInterval(fetchBellAlerts, 6000);
       return () => clearInterval(timer);
     }
-  }, [user]);
+  }, [user, soundEnabled]);
 
   const handleLoginSuccess = (tokenData: any) => {
     const userData = {
@@ -232,6 +254,25 @@ export function App() {
                   Vector Face Search (Qdrant)
                 </Button>
 
+                <Tooltip title={soundEnabled ? 'Suara Sirine Kritis Aktif (Klik untuk Mute)' : 'Suara Sirine Kritis Dibisukan'}>
+                  <Button
+                    shape="circle"
+                    type={soundEnabled ? 'primary' : 'default'}
+                    ghost={soundEnabled}
+                    icon={soundEnabled ? <SoundOutlined /> : <AudioMutedOutlined />}
+                    onClick={() => {
+                      const next = !soundEnabled;
+                      setSoundEnabled(next);
+                      if (next) {
+                        playEmergencySiren();
+                        message.info('Sirine peringatan kritis diaktifkan');
+                      } else {
+                        message.info('Sirine peringatan kritis dibisukan');
+                      }
+                    }}
+                  />
+                </Tooltip>
+
                 <Popover content={alarmPopoverContent} trigger="click" placement="bottomRight">
                   <Badge count={recentAlerts.length} size="small">
                     <Button shape="circle" icon={<BellOutlined />} />
@@ -256,7 +297,14 @@ export function App() {
                 />
               )}
               {activeTab === 'faces' && <FaceGalleryPage onOpenSearch={() => setFaceSearchOpen(true)} />}
-              {activeTab === 'events' && <EventsPage />}
+              {activeTab === 'events' && (
+                <EventsPage
+                  onCriticalTriggered={() => {
+                    if (soundEnabled) playEmergencySiren();
+                    fetchBellAlerts();
+                  }}
+                />
+              )}
               {activeTab === 'storage' && <StorageSyncPage />}
               {activeTab === 'settings' && (
                 <SettingsPage

@@ -147,3 +147,4 @@ class QdrantVectorService:
             return []
 
 vector_service = QdrantVectorService()
+

@@ -6,7 +6,7 @@ from sqlalchemy.future import select
 from app.core.database import get_db
 from app.models.face import PersonIdentity
 from app.core.qdrant_client import vector_service
-from app.core.security import validate_safe_id
+from app.core.security import validate_safe_id, get_current_user
 
 router = APIRouter(prefix="/faces", tags=["Face Gallery"])
 
@@ -35,7 +35,7 @@ async def get_people_clusters(db: AsyncSession = Depends(get_db)):
     return clusters
 
 @router.put("/people-clusters/{person_id}")
-async def update_person_identity(person_id: str, payload: PersonUpdate, db: AsyncSession = Depends(get_db)):
+async def update_person_identity(person_id: str, payload: PersonUpdate, _: Dict[str, Any] = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     pid = validate_safe_id(person_id, "Person ID")
     result = await db.execute(select(PersonIdentity).where(PersonIdentity.id == pid))
     person = result.scalars().first()
@@ -51,7 +51,7 @@ async def update_person_identity(person_id: str, payload: PersonUpdate, db: Asyn
     return {"status": "success", "message": "Identitas berhasil diperbarui", "person_id": pid}
 
 @router.delete("/people-clusters/{person_id}")
-async def delete_person_identity(person_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_person_identity(person_id: str, _: Dict[str, Any] = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     pid = validate_safe_id(person_id, "Person ID")
     result = await db.execute(select(PersonIdentity).where(PersonIdentity.id == pid))
     person = result.scalars().first()
@@ -63,3 +63,4 @@ async def delete_person_identity(person_id: str, db: AsyncSession = Depends(get_
     vector_service.delete_face_embedding(pid)
 
     return {"status": "success", "message": f"Identitas {pid} berhasil dihapus dari SQL & Qdrant"}
+

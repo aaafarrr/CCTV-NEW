@@ -1,8 +1,8 @@
 from typing import Dict, Any, List
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from app.services.storage_gateway import storage_gateway
-from app.core.security import validate_safe_id
+from app.core.security import validate_safe_id, get_current_user
 
 router = APIRouter(prefix="/storage", tags=["Multi-Cloud Storage Pool (Clospol)"])
 
@@ -31,7 +31,7 @@ async def get_storage_overview() -> Dict[str, Any]:
     return storage_gateway.get_pool_overview()
 
 @router.post("/providers")
-async def add_storage_provider(payload: ProviderCreate):
+async def add_storage_provider(payload: ProviderCreate, _: Dict[str, Any] = Depends(get_current_user)):
     return storage_gateway.add_provider(
         name=payload.name,
         ptype=payload.type,
@@ -41,7 +41,7 @@ async def add_storage_provider(payload: ProviderCreate):
     )
 
 @router.put("/providers/{provider_id}/toggle")
-async def toggle_storage_provider(provider_id: str):
+async def toggle_storage_provider(provider_id: str, _: Dict[str, Any] = Depends(get_current_user)):
     pid = validate_safe_id(provider_id, "Provider ID")
     try:
         return storage_gateway.toggle_provider(pid)
@@ -49,7 +49,7 @@ async def toggle_storage_provider(provider_id: str):
         raise HTTPException(status_code=404, detail="Storage provider tidak ditemukan")
 
 @router.delete("/providers/{provider_id}")
-async def delete_storage_provider(provider_id: str):
+async def delete_storage_provider(provider_id: str, _: Dict[str, Any] = Depends(get_current_user)):
     pid = validate_safe_id(provider_id, "Provider ID")
     if pid == "prov_local_nvme":
         raise HTTPException(status_code=400, detail="Local NVMe Buffer utama tidak dapat dihapus")
@@ -58,9 +58,10 @@ async def delete_storage_provider(provider_id: str):
     return {"status": "success", "message": f"Provider {pid} berhasil dihapus"}
 
 @router.put("/policy")
-async def update_storage_policy(payload: PolicyUpdate):
+async def update_storage_policy(payload: PolicyUpdate, _: Dict[str, Any] = Depends(get_current_user)):
     return storage_gateway.update_policy(payload.model_dump())
 
 @router.post("/sync")
-async def trigger_manual_sync(payload: SyncTriggerRequest):
+async def trigger_manual_sync(payload: SyncTriggerRequest, _: Dict[str, Any] = Depends(get_current_user)):
     return storage_gateway.trigger_cloud_sync(camera_name=payload.camera_name, reason=payload.reason)
+

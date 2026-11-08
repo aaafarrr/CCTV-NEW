@@ -181,3 +181,4 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
     </Card>
   );
 };
+

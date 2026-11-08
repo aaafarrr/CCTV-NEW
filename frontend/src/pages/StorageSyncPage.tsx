@@ -28,6 +28,7 @@ import {
   SafetyOutlined,
 } from '@ant-design/icons';
 import { ENTERPRISE_TOKENS } from '../theme/enterpriseTheme';
+import { apiFetch } from '../utils/api';
 
 const { Title, Text } = Typography;
 
@@ -63,7 +64,7 @@ export const StorageSyncPage: React.FC = () => {
   const handleTriggerSync = async () => {
     setSyncing(true);
     try {
-      const res = await fetch('/api/v1/storage/sync', {
+      const res = await apiFetch('/api/v1/storage/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -89,7 +90,7 @@ export const StorageSyncPage: React.FC = () => {
       return;
     }
     try {
-      const res = await fetch('/api/v1/storage/providers', {
+      const res = await apiFetch('/api/v1/storage/providers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -112,12 +113,12 @@ export const StorageSyncPage: React.FC = () => {
   };
 
   const handleToggleProvider = async (id: string) => {
-    await fetch(`/api/v1/storage/providers/${id}/toggle`, { method: 'PUT' });
+    await apiFetch(`/api/v1/storage/providers/${id}/toggle`, { method: 'PUT' });
     fetchOverview();
   };
 
   const handleDeleteProvider = async (id: string) => {
-    const res = await fetch(`/api/v1/storage/providers/${id}`, { method: 'DELETE' });
+    const res = await apiFetch(`/api/v1/storage/providers/${id}`, { method: 'DELETE' });
     if (!res.ok) {
       const err = await res.json();
       message.error(err.detail || 'Gagal menghapus provider');
@@ -129,7 +130,7 @@ export const StorageSyncPage: React.FC = () => {
 
   const handleToggleAutoTiering = async (enabled: boolean) => {
     if (!overview?.policy) return;
-    await fetch('/api/v1/storage/policy', {
+    await apiFetch('/api/v1/storage/policy', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -345,3 +346,4 @@ export const StorageSyncPage: React.FC = () => {
     </Space>
   );
 };
+

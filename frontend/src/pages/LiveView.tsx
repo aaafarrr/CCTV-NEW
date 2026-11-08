@@ -32,6 +32,7 @@ import {
 } from '@ant-design/icons';
 import { ENTERPRISE_TOKENS } from '../theme/enterpriseTheme';
 import { TimelineScrubber, TimelineBand } from '../components/TimelineScrubber';
+import { apiFetch } from '../utils/api';
 
 const { Title, Text } = Typography;
 
@@ -254,7 +255,7 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
   const handleSaveRoiConfig = async () => {
     if (!editingCam) return;
     try {
-      const res = await fetch(`/api/v1/cameras/${editingCam.id}`, {
+      const res = await apiFetch(`/api/v1/cameras/${editingCam.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -531,3 +532,4 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
     </Space>
   );
 };
+

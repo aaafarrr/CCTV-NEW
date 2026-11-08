@@ -324,3 +324,4 @@ export const DashboardPage: React.FC<DashboardProps> = ({ onNavigate }) => {
     </Space>
   );
 };
+

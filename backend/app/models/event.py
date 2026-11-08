@@ -34,3 +34,4 @@ class TrafficCountLog(Base):
 
     vehicle_breakdown = Column(JSON, default=dict)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+

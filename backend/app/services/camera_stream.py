@@ -1,8 +1,10 @@
 import os
 import json
 import time
+import sqlite3
 import logging
 import threading
+from datetime import datetime
 from collections import deque
 import numpy as np
 import cv2
@@ -380,11 +382,13 @@ class CameraStreamManager:
                 cam_info.get("roi_zones", [])
             )
             for al in alerts:
+                alert_id = f"rt_{int(time.time()*1000)}_{camera_id}"
                 self.recent_runtime_alerts.appendleft({
-                    "id": f"rt_{int(time.time()*1000)}_{camera_id}",
+                    "id": alert_id,
                     "timestamp": time.time(),
                     **al
                 })
+                self._persist_alert_sqlite(alert_id, al)
 
         # 4. Face Recognition
         faces = []
@@ -529,6 +533,37 @@ class CameraStreamManager:
 
         return frame
 
+    def _persist_alert_sqlite(self, alert_id: str, al: Dict[str, Any]):
+        """Persist real-time alert directly into SQLite security_events table"""
+        db_path = os.path.join(BASE_DIR, "cctv_enterprise.db")
+        if not os.path.exists(db_path):
+            return
+        try:
+            with sqlite3.connect(db_path, timeout=2.0) as conn:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO security_events
+                    (id, camera_id, camera_name, event_type, severity, description, ai_summary, snapshot_url, cloud_synced, metadata_json, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        alert_id,
+                        al.get("camera_id", "cam_1"),
+                        al.get("camera_name", "Kamera Utama"),
+                        al.get("event_type", "INTRUSION"),
+                        al.get("severity", "CRITICAL"),
+                        al.get("description", ""),
+                        al.get("ai_summary", ""),
+                        f"/api/v1/cameras/{al.get('camera_id', 'cam_1')}/thumbnail?show_boxes=true",
+                        1,
+                        json.dumps(al.get("metadata", {})),
+                        datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                    )
+                )
+                conn.commit()
+        except Exception as e:
+            logger.debug(f"SQLite alert persist skipped: {e}")
+
     def update_camera_config(
         self,
         camera_id: str,
@@ -554,3 +589,4 @@ class CameraStreamManager:
             self._save_persistent_cameras()
 
 stream_manager = CameraStreamManager()
+

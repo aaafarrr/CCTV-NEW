@@ -44,3 +44,4 @@ settings = Settings()
 
 for path in [settings.MEDIA_DIR, settings.CROP_DIR, settings.FACES_DIR, settings.CLIPS_DIR]:
     os.makedirs(path, exist_ok=True)
+

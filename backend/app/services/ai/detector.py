@@ -102,3 +102,4 @@ class ObjectDetectorTracker:
         return frame, detections
 
 detector_tracker = ObjectDetectorTracker()
+

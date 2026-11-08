@@ -36,6 +36,7 @@ app.include_router(storage.router, prefix=settings.API_V1_STR)
 @app.on_event("startup")
 async def startup_event():
     await init_db()
+    await auth.seed_initial_users()
     await face_search_service.seed_initial_identities()
     await alerts.seed_initial_events()
 
@@ -55,3 +56,4 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+

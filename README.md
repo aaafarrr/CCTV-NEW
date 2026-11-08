@@ -25,20 +25,32 @@ Aplikasi Pemantauan CCTV Tingkat Produksi yang mengintegrasikan sintesis dari 8 
 
 ## Cara Menjalankan
 
-### 1. Menjalankan Backend (FastAPI)
+### Opsi 1: 1-Click Launcher (Windows)
+Jalankan file [`start.bat`](file:///d:/Project/CCTV%20NEW/start.bat) atau melalui PowerShell:
+```powershell
+.\start.ps1
+```
+
+### Opsi 2: Menjalankan Manual
+1. **Backend (FastAPI — Port 8000)**:
+   ```powershell
+   cd backend
+   uvicorn app.main:app --reload --port 8000
+   ```
+2. **Frontend (React + Vite + Ant Design — Port 3000)**:
+   ```powershell
+   cd frontend
+   npm run dev
+   ```
+
+### Menjalankan Automated Test Suite
 ```powershell
 cd backend
-uvicorn app.main:app --reload --port 8000
+$env:PYTHONPATH = "."
+python tests/test_api.py
 ```
-Dokumentasi API Swagger tersedia di: `http://localhost:8000/docs`
 
-### 2. Menjalankan Frontend (React + Vite + Ant Design)
-```powershell
-cd frontend
-npm run dev
-```
-Buka browser di: `http://localhost:3000`
-
-### Akun Login Default
+### Akun Login Default (SQLite Persisted)
 - **Administrator**: `admin` / `admin123`
 - **Operator**: `operator` / `operator123`
+

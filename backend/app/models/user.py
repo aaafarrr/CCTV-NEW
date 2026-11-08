@@ -12,3 +12,4 @@ class User(Base):
     role = Column(String, default="OPERATOR")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+

@@ -109,3 +109,4 @@ class FaceRecognitionEngine:
         return normalized_vector
 
 face_engine = FaceRecognitionEngine()
+

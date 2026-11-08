@@ -20,12 +20,18 @@ import {
   CloudUploadOutlined,
   RobotOutlined,
   EyeOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { ENTERPRISE_TOKENS } from '../theme/enterpriseTheme';
+import { apiFetch } from '../utils/api';
 
 const { Title, Text } = Typography;
 
-export const EventsPage: React.FC = () => {
+interface EventsPageProps {
+  onCriticalTriggered?: () => void;
+}
+
+export const EventsPage: React.FC<EventsPageProps> = ({ onCriticalTriggered }) => {
   const [events, setEvents] = useState<any[]>([]);
   const [severityFilter, setSeverityFilter] = useState<string>('ALL');
   const [searchText, setSearchText] = useState<string>('');
@@ -36,7 +42,7 @@ export const EventsPage: React.FC = () => {
     setLoading(true);
     try {
       const q = severityFilter !== 'ALL' ? `?severity=${severityFilter}` : '';
-      const res = await fetch(`/api/v1/alerts${q}`);
+      const res = await apiFetch(`/api/v1/alerts${q}`);
       if (res.ok) {
         setEvents(await res.json());
       }
@@ -51,9 +57,26 @@ export const EventsPage: React.FC = () => {
     fetchAlerts();
   }, [severityFilter]);
 
+  const handleSimulateFall = async () => {
+    try {
+      const res = await apiFetch('/api/v1/alerts/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_type: 'FALL_DETECTED', camera_id: 'cam_1' }),
+      });
+      if (!res.ok) throw new Error('Gagal memicu simulasi');
+      const data = await res.json();
+      message.warning(`ALERT KRITIS: ${data.description}`);
+      onCriticalTriggered?.();
+      fetchAlerts();
+    } catch {
+      message.error('Gagal memicu simulasi deteksi jatuh');
+    }
+  };
+
   const handleDeleteOne = async (id: string) => {
     try {
-      await fetch(`/api/v1/alerts/${id}`, { method: 'DELETE' });
+      await apiFetch(`/api/v1/alerts/${id}`, { method: 'DELETE' });
       message.success('Log insiden dihapus');
       fetchAlerts();
     } catch {
@@ -63,7 +86,7 @@ export const EventsPage: React.FC = () => {
 
   const handleClearAll = async () => {
     try {
-      await fetch('/api/v1/alerts', { method: 'DELETE' });
+      await apiFetch('/api/v1/alerts', { method: 'DELETE' });
       message.success('Seluruh log insiden dibersihkan');
       fetchAlerts();
     } catch {
@@ -139,7 +162,7 @@ export const EventsPage: React.FC = () => {
       render: (name: string) => <Text strong>{name}</Text>,
     },
     {
-      title: 'Deskripsi & Ringkasan Naratif AI (ClearCam / VLM Engine)',
+      title: 'Deskripsi & Ringkasan Naratif AI (ClearCam / DeepCamera Engine)',
       key: 'description',
       render: (_: any, r: any) => (
         <div>
@@ -197,7 +220,7 @@ export const EventsPage: React.FC = () => {
               Log Insiden Keamanan & Ringkasan AI
             </Title>
             <Text type="secondary" style={{ fontSize: 13 }}>
-              Pencatatan otomatis Intrusion, Loitering, dan Pencocokan Wajah Watchlist
+              Pencatatan otomatis Intrusion, Loitering, Fall Detection (DeepCamera), dan Pencocokan Wajah Watchlist
             </Text>
           </div>
 
@@ -206,13 +229,13 @@ export const EventsPage: React.FC = () => {
               placeholder="Cari deskripsi atau kamera..."
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              style={{ width: 220 }}
+              style={{ width: 200 }}
               allowClear
             />
             <Select
               value={severityFilter}
               onChange={(v) => setSeverityFilter(v)}
-              style={{ width: 150 }}
+              style={{ width: 145 }}
               options={[
                 { value: 'ALL', label: 'Semua Tingkat' },
                 { value: 'CRITICAL', label: '🔴 Kritis (Critical)' },
@@ -220,6 +243,9 @@ export const EventsPage: React.FC = () => {
                 { value: 'INFO', label: '🔵 Informasi (Info)' },
               ]}
             />
+            <Button type="primary" danger ghost icon={<ThunderboltOutlined />} onClick={handleSimulateFall}>
+              Uji Deteksi Jatuh (Fall Alert)
+            </Button>
             <Button icon={<ReloadOutlined spin={loading} />} onClick={fetchAlerts}>
               Segarkan
             </Button>
@@ -227,7 +253,7 @@ export const EventsPage: React.FC = () => {
               Export CSV
             </Button>
             <Popconfirm title="Bersihkan seluruh log insiden?" onConfirm={handleClearAll}>
-              <Button danger icon={<DeleteOutlined />}>Bersihkan Semua</Button>
+              <Button danger icon={<DeleteOutlined />}>Bersihkan</Button>
             </Popconfirm>
           </Space>
         </div>

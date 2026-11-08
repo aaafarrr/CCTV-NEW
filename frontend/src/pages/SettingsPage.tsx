@@ -25,6 +25,7 @@ import {
   WifiOutlined,
   CheckCircleOutlined,
 } from '@ant-design/icons';
+import { apiFetch } from '../utils/api';
 
 const { Title, Text } = Typography;
 
@@ -64,7 +65,7 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
   };
 
   const fetchUsers = async () => {
-    const res = await fetch('/api/v1/auth/users');
+    const res = await apiFetch('/api/v1/auth/users');
     if (res.ok) setUsers(await res.json());
   };
 
@@ -134,7 +135,7 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
   };
 
   const handleDeleteCamera = async (id: string) => {
-    await fetch(`/api/v1/cameras/${id}`, { method: 'DELETE' });
+    await apiFetch(`/api/v1/cameras/${id}`, { method: 'DELETE' });
     message.success('Kamera dihapus');
     fetchCameras();
   };
@@ -410,3 +411,4 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
     </Card>
   );
 };
+

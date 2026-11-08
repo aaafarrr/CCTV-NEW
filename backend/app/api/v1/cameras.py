@@ -3,12 +3,12 @@ import time
 import asyncio
 import cv2
 from typing import List, Dict, Any
-from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Depends, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from pydantic import BaseModel, Field
 from app.services.camera_stream import stream_manager
 from app.services.v380_scanner import v380_scanner
-from app.core.security import validate_safe_id, validate_safe_filename, validate_stream_url
+from app.core.security import validate_safe_id, validate_safe_filename, validate_stream_url, get_current_user
 
 router = APIRouter(prefix="/cameras", tags=["Cameras & PTZ"])
 
@@ -99,7 +99,7 @@ async def get_camera(camera_id: str):
     return cam_info
 
 @router.put("/{camera_id}")
-async def update_camera(camera_id: str, config: CameraConfigUpdate):
+async def update_camera(camera_id: str, config: CameraConfigUpdate, _: Dict[str, Any] = Depends(get_current_user)):
     cid = validate_safe_id(camera_id, "Camera ID")
     safe_url = validate_stream_url(config.stream_url)
     if cid not in stream_manager.active_streams:
@@ -130,7 +130,7 @@ async def update_camera(camera_id: str, config: CameraConfigUpdate):
     return {"status": "success", "message": f"Konfigurasi kamera {cid} berhasil disimpan"}
 
 @router.delete("/{camera_id}")
-async def delete_camera(camera_id: str):
+async def delete_camera(camera_id: str, _: Dict[str, Any] = Depends(get_current_user)):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
@@ -289,3 +289,4 @@ async def list_camera_snapshots(camera_id: str):
             })
     cam_snapshots.sort(key=lambda x: x["timestamp"], reverse=True)
     return cam_snapshots
+

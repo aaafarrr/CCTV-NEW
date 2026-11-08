@@ -223,3 +223,4 @@ async def get_hourly_traffic_chart(
             {"label": "Kendaraan (Vehicles)", "data": vehicle_trend, "borderColor": "#8b5cf6"}
         ]
     }
+
