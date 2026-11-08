@@ -4,13 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.v1 import cameras, analytics, alerts, faces, search, auth, storage
-from app.services.camera_stream import stream_manager
+from app.api.v1 import auth, cctv, google_drive_api
+from app.services.cctv_engine import clospol_engine
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    version="2.1.0",
-    description="Enterprise AI CCTV NVR (Production Engine) with Real YOLOv8, InsightFace 512-d & S3 Object Storage"
+    version="2.5.0",
+    description="Clospol CCTV Surveillance & Google Drive Multi-Tier Storage Gateway"
 )
 
 app.add_middleware(
@@ -22,15 +22,13 @@ app.add_middleware(
 )
 
 os.makedirs(settings.MEDIA_DIR, exist_ok=True)
+os.makedirs(settings.RECORDINGS_DIR, exist_ok=True)
+os.makedirs(settings.SNAPSHOTS_DIR, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.MEDIA_DIR), name="media")
 
 app.include_router(auth.router, prefix=settings.API_V1_STR)
-app.include_router(cameras.router, prefix=settings.API_V1_STR)
-app.include_router(analytics.router, prefix=settings.API_V1_STR)
-app.include_router(alerts.router, prefix=settings.API_V1_STR)
-app.include_router(faces.router, prefix=settings.API_V1_STR)
-app.include_router(search.router, prefix=settings.API_V1_STR)
-app.include_router(storage.router, prefix=settings.API_V1_STR)
+app.include_router(cctv.router, prefix=settings.API_V1_STR)
+app.include_router(google_drive_api.router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
 async def startup_event():
@@ -38,15 +36,14 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    stream_manager.stop_all()
+    clospol_engine.stop()
 
 @app.get("/")
 async def root():
     return {
         "status": "ONLINE",
         "system": settings.PROJECT_NAME,
-        "docs": "/docs",
-        "ai_device": settings.AI_DEVICE
+        "docs": "/docs"
     }
 
 @app.get("/health")

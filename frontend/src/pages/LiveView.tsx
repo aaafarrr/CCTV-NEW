@@ -1,82 +1,80 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
+  Row,
+  Col,
   Button,
-  Space,
   Tag,
-  Switch,
-  Segmented,
-  Tooltip,
+  Space,
   Typography,
-  Badge,
-  Drawer,
+  Table,
+  Modal,
   Form,
   Input,
+  InputNumber,
+  Switch,
   Select,
+  Segmented,
+  Tooltip,
+  Badge,
+  Popconfirm,
   message,
 } from 'antd';
 import {
+  VideoCameraOutlined,
   CameraOutlined,
-  FullscreenOutlined,
-  ZoomInOutlined,
-  ZoomOutOutlined,
-  ArrowUpOutlined,
-  ArrowDownOutlined,
-  ArrowLeftOutlined,
-  ArrowRightOutlined,
-  ReloadOutlined,
+  VideoCameraAddOutlined,
   EditOutlined,
-  BorderOuterOutlined,
   DeleteOutlined,
-  SaveOutlined,
+  PlayCircleOutlined,
+  CloudUploadOutlined,
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
+  ReloadOutlined,
+  FullscreenOutlined,
 } from '@ant-design/icons';
 import { ENTERPRISE_TOKENS } from '../theme/enterpriseTheme';
-import { TimelineScrubber, TimelineBand } from '../components/TimelineScrubber';
 import { apiFetch } from '../utils/api';
 
 const { Title, Text } = Typography;
 
-interface LiveViewProps {
-  initialEditCameraId?: string | null;
-  onClearInitialEditCameraId?: () => void;
-}
-
-export const LiveViewPage: React.FC<LiveViewProps> = ({
-  initialEditCameraId,
-  onClearInitialEditCameraId,
-}) => {
+export const LiveViewPage: React.FC = () => {
   const [cameras, setCameras] = useState<any[]>([]);
-  const [gridSize, setGridSize] = useState<number>(2); // 1=1x1, 2=2x2, 3=3x3, 4=4x4
-  const [selectedCamId, setSelectedCamId] = useState<string>('cam_1');
-  const [showBoxes, setShowBoxes] = useState<boolean>(true);
-  const [timelineBands, setTimelineBands] = useState<TimelineBand[]>([]);
-  const [preBufferCount, setPreBufferCount] = useState<number>(75);
-  const [replayBand, setReplayBand] = useState<TimelineBand | null>(null);
+  const [selectedCam, setSelectedCam] = useState<any | null>(null);
+  const [galleryFiles, setGalleryFiles] = useState<any[]>([]);
+  const [loadingGallery, setLoadingGallery] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [gridSize, setGridSize] = useState<number>(2);
 
-  // ROI & Counting Line Drawer State
-  const [roiDrawerOpen, setRoiDrawerOpen] = useState<boolean>(false);
-  const [editingCam, setEditingCam] = useState<any | null>(null);
-  const [drawMode, setDrawMode] = useState<'ROI_INTRUSION' | 'ROI_LOITERING' | 'COUNTING_LINE'>('ROI_INTRUSION');
-  const [zoneName, setZoneName] = useState<string>('Area Terbatas Baru');
-  const [draftPoints, setDraftPoints] = useState<{ x: number; y: number }[]>([]);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Modal Camera Form
+  const [modalOpen, setModalOpen] = useState(false);
+  const [isEdit, setIsEdit] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [camName, setCamName] = useState('');
+  const [camStreamUrl, setCamStreamUrl] = useState('');
+  const [camSnapshotUrl, setCamSnapshotUrl] = useState('');
+  const [camRecordStream, setCamRecordStream] = useState(false);
+  const [camRecordInterval, setCamRecordInterval] = useState(5);
+  const [camRetentionDays, setCamRetentionDays] = useState(7);
+
+  // ONVIF helper
+  const [onvifUrl, setOnvifUrl] = useState('');
+  const [onvifUser, setOnvifUser] = useState('');
+  const [onvifPass, setOnvifPass] = useState('');
+  const [testingOnvif, setTestingOnvif] = useState(false);
+
+  // Playback Modal
+  const [playbackFile, setPlaybackFile] = useState<any | null>(null);
 
   const fetchCameras = async () => {
     try {
-      const res = await fetch('/api/v1/cameras');
+      const res = await apiFetch('/api/cctv');
       if (res.ok) {
         const data = await res.json();
-        setCameras(data);
-        if (data.length > 0 && !data.some((c: any) => c.id === selectedCamId)) {
-          setSelectedCamId(data[0].id);
-        }
-        if (initialEditCameraId) {
-          const target = data.find((c: any) => c.id === initialEditCameraId);
-          if (target) {
-            setEditingCam(target);
-            setRoiDrawerOpen(true);
-            onClearInitialEditCameraId?.();
-          }
+        setCameras(data.cameras || []);
+        if (data.cameras && data.cameras.length > 0 && !selectedCam) {
+          setSelectedCam(data.cameras[0]);
         }
       }
     } catch {
@@ -84,490 +82,482 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
     }
   };
 
-  const fetchTimeline = async (camId: string) => {
+  const fetchGallery = async (camId: string) => {
+    setLoadingGallery(true);
     try {
-      const res = await fetch(`/api/v1/cameras/${camId}/timeline`);
+      const res = await apiFetch(`/api/cctv/${camId}/gallery`);
       if (res.ok) {
         const data = await res.json();
-        setTimelineBands(data.bands || []);
-        setPreBufferCount(data.pre_event_buffer_frames || 75);
+        setGalleryFiles(data.files || []);
       }
     } catch {
       // ignore
+    } finally {
+      setLoadingGallery(false);
     }
   };
 
   useEffect(() => {
     fetchCameras();
-    const t = setInterval(fetchCameras, 5000);
-    return () => clearInterval(t);
+    const interval = setInterval(fetchCameras, 8000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
-    if (selectedCamId) {
-      fetchTimeline(selectedCamId);
+    if (selectedCam) {
+      fetchGallery(selectedCam.id);
     }
-  }, [selectedCamId]);
+  }, [selectedCam?.id]);
 
-  const sendPtzCommand = async (camId: string, action: string) => {
+  const handleTestOnvif = async () => {
+    if (!onvifUrl.trim()) {
+      message.warning('Masukkan URL/IP ONVIF');
+      return;
+    }
+    setTestingOnvif(true);
     try {
-      const res = await apiFetch(`/api/v1/cameras/${camId}/ptz`, {
+      const res = await apiFetch('/api/cctv/test-connection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, step: 0.18 }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCameras((prev) =>
-          prev.map((c) => (c.id === camId ? { ...c, ptz: data.ptz } : c))
-        );
-      }
-    } catch {
-      message.error('Gagal mengirim instruksi PTZ');
-    }
-  };
-
-  const handleTakeSnapshot = async (camId: string, camName: string) => {
-    try {
-      const res = await apiFetch(`/api/v1/cameras/${camId}/snapshot`, { method: 'POST' });
-      if (!res.ok) throw new Error('Snapshot gagal');
-      const data = await res.json();
-      message.success(`Snapshot ${camName} tersimpan (${data.filename})`);
-      window.open(data.download_url, '_blank');
-    } catch {
-      message.error('Gagal mengambil snapshot kamera');
-    }
-  };
-
-  // Draw draft polygon/line on ROI Editor Canvas
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !editingCam) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Draw existing ROI zones
-    (editingCam.roi_zones || []).forEach((z: any) => {
-      const pts = z.polygon || [];
-      if (pts.length >= 3) {
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        pts.slice(1).forEach((p: any) => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fillStyle = z.type === 'INTRUSION' ? 'rgba(239, 68, 68, 0.25)' : 'rgba(245, 158, 11, 0.25)';
-        ctx.fill();
-        ctx.strokeStyle = z.type === 'INTRUSION' ? '#ef4444' : '#f59e0b';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-    });
-
-    // Draw existing Counting Lines
-    (editingCam.counting_lines || []).forEach((l: any) => {
-      if (l.start && l.end) {
-        ctx.beginPath();
-        ctx.moveTo(l.start.x, l.start.y);
-        ctx.lineTo(l.end.x, l.end.y);
-        ctx.strokeStyle = '#06b6d4';
-        ctx.lineWidth = 3;
-        ctx.stroke();
-      }
-    });
-
-    // Draw current draft points
-    if (draftPoints.length > 0) {
-      ctx.beginPath();
-      ctx.moveTo(draftPoints[0].x, draftPoints[0].y);
-      draftPoints.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
-      if (drawMode !== 'COUNTING_LINE' && draftPoints.length >= 3) {
-        ctx.closePath();
-      }
-      ctx.strokeStyle = '#1677ff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      draftPoints.forEach((p) => {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#1677ff';
-        ctx.fill();
-      });
-    }
-  }, [editingCam, draftPoints, drawMode, roiDrawerOpen]);
-
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const scaleX = 640 / rect.width;
-    const scaleY = 420 / rect.height;
-    const x = Math.round((e.clientX - rect.left) * scaleX);
-    const y = Math.round((e.clientY - rect.top) * scaleY);
-
-    if (drawMode === 'COUNTING_LINE') {
-      if (draftPoints.length >= 2) {
-        setDraftPoints([{ x, y }]);
-      } else {
-        setDraftPoints((prev) => [...prev, { x, y }]);
-      }
-    } else {
-      setDraftPoints((prev) => [...prev, { x, y }]);
-    }
-  };
-
-  const handleAddDraftToCamera = () => {
-    if (!editingCam) return;
-    if (drawMode === 'COUNTING_LINE') {
-      if (draftPoints.length < 2) {
-        message.warning('Klik 2 titik pada gambar untuk membuat Garis Hitung');
-        return;
-      }
-      const newLine = {
-        id: `line_${Date.now()}`,
-        name: zoneName || 'Garis Sensor',
-        start: draftPoints[0],
-        end: draftPoints[1],
-      };
-      setEditingCam({
-        ...editingCam,
-        counting_lines: [...(editingCam.counting_lines || []), newLine],
-      });
-      setDraftPoints([]);
-      message.success('Garis hitung ditambahkan ke draf');
-    } else {
-      if (draftPoints.length < 3) {
-        message.warning('Klik minimal 3 titik pada gambar untuk membentuk zona poligon');
-        return;
-      }
-      const newZone = {
-        id: `zone_${Date.now()}`,
-        name: zoneName || 'Zona Terlarang',
-        type: drawMode === 'ROI_INTRUSION' ? 'INTRUSION' : 'LOITERING',
-        polygon: draftPoints,
-        max_dwell_sec: 5,
-      };
-      setEditingCam({
-        ...editingCam,
-        roi_zones: [...(editingCam.roi_zones || []), newZone],
-      });
-      setDraftPoints([]);
-      message.success('Zona ROI ditambahkan ke draf');
-    }
-  };
-
-  const handleSaveRoiConfig = async () => {
-    if (!editingCam) return;
-    try {
-      const res = await apiFetch(`/api/v1/cameras/${editingCam.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: editingCam.name,
-          location: editingCam.location,
-          stream_url: editingCam.stream_url,
-          enable_counting: editingCam.enable_counting,
-          enable_suspicious: editingCam.enable_suspicious,
-          enable_face_rec: editingCam.enable_face_rec,
-          roi_zones: editingCam.roi_zones || [],
-          counting_lines: editingCam.counting_lines || [],
+          stream_url: onvifUrl,
+          onvif_url: onvifUrl,
+          onvif_username: onvifUser,
+          onvif_password: onvifPass,
         }),
       });
-      if (!res.ok) throw new Error('Gagal menyimpan ROI');
-      message.success(`Zona ROI & Garis Hitung untuk ${editingCam.name} berhasil disimpan`);
-      setRoiDrawerOpen(false);
-      fetchCameras();
+
+      if (!res.ok) throw new Error('Koneksi ONVIF gagal');
+      const data = await res.json();
+      message.success('ONVIF ditemukan! URL RTSP otomatis diterapkan');
+      if (data.stream_url) setCamStreamUrl(data.stream_url);
+      if (data.onvif_details?.snapshot_url) setCamSnapshotUrl(data.onvif_details.snapshot_url);
     } catch (e: any) {
-      message.error(e.message || 'Gagal menyimpan konfigurasi');
+      message.error(e.message || 'Koneksi ONVIF gagal');
+    } finally {
+      setTestingOnvif(false);
     }
   };
 
-  const displayedCameras =
-    gridSize === 1
-      ? cameras.filter((c) => c.id === selectedCamId)
-      : cameras.slice(0, gridSize * gridSize);
+  const handleSaveCamera = async () => {
+    if (!camName.trim() || !camStreamUrl.trim()) {
+      message.warning('Nama Kamera dan Stream URL wajib diisi');
+      return;
+    }
 
-  const selectedCamObj = cameras.find((c) => c.id === selectedCamId) || cameras[0];
+    try {
+      const payload = {
+        name: camName.trim(),
+        stream_url: camStreamUrl.trim(),
+        snapshot_url: camSnapshotUrl.trim() || null,
+        record_stream: camRecordStream,
+        record_interval: camRecordInterval,
+        retention_days: camRetentionDays,
+        snapshot_headers: {},
+      };
+
+      const url = isEdit ? `/api/cctv/${editId}` : '/api/cctv';
+      const method = isEdit ? 'PUT' : 'POST';
+
+      const res = await apiFetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error('Gagal menyimpan kamera');
+      message.success(`Kamera ${camName} berhasil disimpan`);
+      setModalOpen(false);
+      fetchCameras();
+    } catch (e: any) {
+      message.error(e.message || 'Error simpan kamera');
+    }
+  };
+
+  const handleDeleteCamera = async (camId: string) => {
+    try {
+      const res = await apiFetch(`/api/cctv/${camId}`, { method: 'DELETE' });
+      if (res.ok) {
+        message.success('Kamera dihapus');
+        if (selectedCam?.id === camId) setSelectedCam(null);
+        fetchCameras();
+      }
+    } catch {
+      message.error('Gagal menghapus kamera');
+    }
+  };
+
+  const handleCaptureSnapshot = async () => {
+    if (!selectedCam) return;
+    setCapturing(true);
+    try {
+      const res = await apiFetch(`/api/cctv/${selectedCam.id}/capture`, { method: 'POST' });
+      if (res.ok) {
+        message.success('Snapshot tersimpan & otomatis tersinkron ke Google Drive!');
+        fetchGallery(selectedCam.id);
+      } else {
+        const err = await res.json();
+        throw new Error(err.detail || 'Gagal capture');
+      }
+    } catch (e: any) {
+      message.error(e.message || 'Snapshot error');
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  const handleRecordClip = async () => {
+    if (!selectedCam) return;
+    setRecording(true);
+    message.loading({ content: 'Merekam klip video stream (15 detik)...', key: 'rec_clip', duration: 16 });
+    try {
+      const res = await apiFetch(`/api/cctv/${selectedCam.id}/record-clip?duration=15`, { method: 'POST' });
+      if (res.ok) {
+        message.success({ content: 'Rekaman video berhasil dibuat & tersinkron ke Google Drive!', key: 'rec_clip' });
+        fetchGallery(selectedCam.id);
+      } else {
+        const err = await res.json();
+        throw new Error(err.detail || 'Gagal merekam');
+      }
+    } catch (e: any) {
+      message.error({ content: e.message || 'Record error', key: 'rec_clip' });
+    } finally {
+      setRecording(false);
+    }
+  };
+
+  const galleryColumns = [
+    {
+      title: 'Nama File',
+      dataIndex: 'name',
+      key: 'name',
+      render: (t: string, r: any) => (
+        <Space>
+          <Tag color={r.fileType === 'video' ? 'blue' : 'purple'}>{r.fileType.toUpperCase()}</Tag>
+          <Text strong>{t}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Waktu Dibuat',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (t: string) => <span className="mono-text" style={{ fontSize: 12 }}>{new Date(t).toLocaleString('id-ID')}</span>,
+    },
+    {
+      title: 'Ukuran',
+      dataIndex: 'sizeBytes',
+      key: 'sizeBytes',
+      render: (b: number) => `${(b / (1024 * 1024)).toFixed(2)} MB`,
+    },
+    {
+      title: 'Status Google Drive',
+      dataIndex: 'syncStatus',
+      key: 'syncStatus',
+      render: (s: string, r: any) =>
+        s === 'synced' ? (
+          <a href={r.googleDriveUrl} target="_blank" rel="noreferrer">
+            <Tag icon={<CheckCircleOutlined />} color="success">Tersimpan di Cloud</Tag>
+          </a>
+        ) : (
+          <Tag color="default">Lokal Saja</Tag>
+        ),
+    },
+    {
+      title: 'Aksi',
+      key: 'action',
+      render: (_: any, r: any) => (
+        <Space>
+          <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => setPlaybackFile(r)}>
+            Lihat Rekaman
+          </Button>
+          <Button size="small" href={r.downloadUrl} download>
+            Unduh
+          </Button>
+        </Space>
+      ),
+    },
+  ];
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      {/* Top Matrix Control Bar */}
+      {/* Top Header Control Bar */}
       <Card size="small">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-          <Space size="middle" wrap>
-            <Title level={4} style={{ margin: 0 }}>Live Multi-Camera Matrix & PTZ</Title>
+          <Space wrap size="middle">
+            <Title level={4} style={{ margin: 0 }}>
+              <VideoCameraOutlined style={{ color: ENTERPRISE_TOKENS.primaryColor, marginRight: 8 }} />
+              Live CCTV Matrix & Clospol Player
+            </Title>
             <Segmented
               value={gridSize}
               onChange={(val) => setGridSize(Number(val))}
               options={[
-                { label: '1x1 Focus', value: 1 },
-                { label: '2x2 Quad', value: 2 },
-                { label: '3x3 Matrix (9)', value: 3 },
-                { label: '4x4 Matrix (16)', value: 4 },
+                { label: '1x1 Fokus', value: 1 },
+                { label: '2x2 Grid', value: 2 },
+                { label: '3x3 Matrix', value: 3 },
               ]}
             />
           </Space>
 
-          <Space size="middle" wrap>
-            <Space size="small">
-              <BorderOuterOutlined style={{ color: ENTERPRISE_TOKENS.primaryColor }} />
-              <Text strong style={{ fontSize: 13 }}>AI Bounding Box & ROI Overlay:</Text>
-              <Switch checked={showBoxes} onChange={(v) => setShowBoxes(v)} />
-            </Space>
-
-            {selectedCamObj && (
-              <Button
-                icon={<EditOutlined />}
-                onClick={() => {
-                  setEditingCam(selectedCamObj);
-                  setDraftPoints([]);
-                  setRoiDrawerOpen(true);
-                }}
-              >
-                Konfigurasi Zona ROI ({selectedCamObj.name})
-              </Button>
-            )}
+          <Space wrap>
+            <Button
+              type="primary"
+              icon={<VideoCameraAddOutlined />}
+              onClick={() => {
+                setIsEdit(false);
+                setCamName('');
+                setCamStreamUrl('');
+                setCamSnapshotUrl('');
+                setCamRecordStream(false);
+                setModalOpen(true);
+              }}
+            >
+              Tambah Kamera Baru
+            </Button>
           </Space>
         </div>
       </Card>
 
-      {/* Adaptive Video Grid */}
-      {displayedCameras.length === 0 ? (
+      {/* Main Grid View */}
+      {cameras.length === 0 ? (
         <Card style={{ textAlign: 'center', padding: '40px 20px' }}>
           <Title level={4} type="secondary">Belum Ada Kamera Terdaftar</Title>
           <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-            Tambahkan kamera RTSP atau gunakan pemindai ONVIF/V380 pada menu Pengaturan Kamera.
+            Tambahkan kamera IP/RTSP Anda atau hubungkan kamera ONVIF untuk memulai monitoring dan sinkronisasi ke Google Drive.
           </Text>
+          <Button type="primary" icon={<VideoCameraAddOutlined />} onClick={() => setModalOpen(true)}>
+            Daftarkan Kamera Pertama
+          </Button>
         </Card>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
-            gap: 14,
-          }}
-        >
-        {displayedCameras.map((cam) => {
-          const isSelected = cam.id === selectedCamId;
-          return (
-            <Card
-              key={cam.id}
-              size="small"
-              onClick={() => setSelectedCamId(cam.id)}
+        <Row gutter={[16, 16]}>
+          <Col xs={24} lg={gridSize === 1 ? 24 : 16}>
+            <div
               style={{
-                border: isSelected
-                  ? `2px solid ${ENTERPRISE_TOKENS.primaryColor}`
-                  : `1px solid ${ENTERPRISE_TOKENS.borderLight}`,
-                cursor: 'pointer',
+                display: 'grid',
+                gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
+                gap: 12,
               }}
-              title={
-                <Space size="small">
-                  <Badge status={cam.status === 'ONLINE' ? 'success' : 'default'} />
-                  <Text strong style={{ fontSize: 13 }}>{cam.name}</Text>
-                  <Tag color="blue" style={{ margin: 0 }}>{cam.location}</Tag>
-                </Space>
-              }
-              extra={
-                <Space size={4}>
-                  <Tooltip title="Ambil Snapshot">
-                    <Button
-                      size="small"
-                      icon={<CameraOutlined />}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleTakeSnapshot(cam.id, cam.name);
-                      }}
-                    />
-                  </Tooltip>
-                  <Tooltip title="Atur Zona ROI & Garis Hitung">
-                    <Button
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingCam(cam);
-                        setDraftPoints([]);
-                        setRoiDrawerOpen(true);
-                      }}
-                    />
-                  </Tooltip>
-                  <Tooltip title={gridSize === 1 ? 'Kembali ke 2x2 Quad' : 'Fokus 1x1 Layar Penuh'}>
-                    <Button
-                      size="small"
-                      icon={<FullscreenOutlined />}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedCamId(cam.id);
-                        setGridSize(gridSize === 1 ? 2 : 1);
-                      }}
-                    />
-                  </Tooltip>
-                </Space>
-              }
             >
-              {/* Pure Black Video Surface */}
-              <div className="cctv-video-surface" style={{ aspectRatio: '16 / 10', position: 'relative' }}>
-                <img
-                  src={
-                    isSelected && replayBand
-                      ? `/api/v1/cameras/${cam.id}/replay?label=${encodeURIComponent(replayBand.label)}`
-                      : `/api/v1/cameras/${cam.id}/stream?show_boxes=${showBoxes}`
-                  }
-                  alt={cam.name}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                />
-                {isSelected && replayBand && (
-                  <div
+              {cameras.slice(0, gridSize * gridSize).map((cam) => {
+                const isSelected = selectedCam?.id === cam.id;
+                return (
+                  <Card
+                    key={cam.id}
+                    size="small"
+                    onClick={() => setSelectedCam(cam)}
                     style={{
-                      position: 'absolute',
-                      bottom: 8,
-                      right: 8,
-                      background: 'rgba(239, 68, 68, 0.92)',
-                      color: '#fff',
-                      padding: '4px 10px',
-                      borderRadius: 6,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
+                      border: isSelected ? `2px solid ${ENTERPRISE_TOKENS.primaryColor}` : '1px solid #e2e8f0',
+                      cursor: 'pointer',
                     }}
+                    title={
+                      <Space>
+                        <Badge status={cam.status === 'active' ? 'success' : 'default'} />
+                        <Text strong>{cam.name}</Text>
+                      </Space>
+                    }
+                    extra={
+                      <Space size={4}>
+                        <Tooltip title="Edit Kamera">
+                          <Button
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsEdit(true);
+                              setEditId(cam.id);
+                              setCamName(cam.name);
+                              setCamStreamUrl(cam.streamUrl);
+                              setCamSnapshotUrl(cam.snapshotUrl || '');
+                              setCamRecordStream(cam.recordStream);
+                              setCamRecordInterval(cam.recordInterval);
+                              setCamRetentionDays(cam.retentionDays);
+                              setModalOpen(true);
+                            }}
+                          />
+                        </Tooltip>
+                        <Popconfirm title="Hapus kamera ini?" onConfirm={() => handleDeleteCamera(cam.id)}>
+                          <Button size="small" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
+                        </Popconfirm>
+                      </Space>
+                    }
                   >
-                    <span>⏪ REPLAY BUFFER (-5s): {replayBand.type}</span>
-                    <Button size="small" onClick={(e) => { e.stopPropagation(); setReplayBand(null); }}>
-                      Live
-                    </Button>
-                  </div>
-                )}
-              </div>
+                    <div style={{ aspectRatio: '16/10', background: '#000', borderRadius: 6, overflow: 'hidden' }}>
+                      <img
+                        src={`/api/cctv/${cam.id}/stream`}
+                        alt={cam.name}
+                        style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+                      />
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </Col>
 
-              {/* Quick PTZ & Telemetry Bar below video */}
-              <div
-                style={{
-                  marginTop: 8,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                  gap: 6,
-                }}
+          {/* Side Control & Action Panel */}
+          {selectedCam && (
+            <Col xs={24} lg={gridSize === 1 ? 24 : 8}>
+              <Card
+                size="small"
+                title={`Kontrol Kamera: ${selectedCam.name}`}
+                extra={<Tag color="blue">{selectedCam.status.toUpperCase()}</Tag>}
               >
-                <Space size={4}>
-                  <Tag color="#10b981">Person: {cam.live_people ?? 0}</Tag>
-                  <Tag color="#8b5cf6">Vehicle: {cam.live_vehicles ?? 0}</Tag>
-                  <Tag>Zoom: {cam.ptz?.zoom ?? 1}x</Tag>
-                </Space>
+                <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>Stream URL:</Text>
+                    <div className="mono-text" style={{ fontSize: 12, wordBreak: 'break-all' }}>{selectedCam.streamUrl}</div>
+                  </div>
 
-                <Space size={4}>
-                  <Tooltip title="Pan Left">
-                    <Button size="small" icon={<ArrowLeftOutlined />} onClick={() => sendPtzCommand(cam.id, 'pan_left')} />
-                  </Tooltip>
-                  <Tooltip title="Tilt Up">
-                    <Button size="small" icon={<ArrowUpOutlined />} onClick={() => sendPtzCommand(cam.id, 'tilt_up')} />
-                  </Tooltip>
-                  <Tooltip title="Tilt Down">
-                    <Button size="small" icon={<ArrowDownOutlined />} onClick={() => sendPtzCommand(cam.id, 'tilt_down')} />
-                  </Tooltip>
-                  <Tooltip title="Pan Right">
-                    <Button size="small" icon={<ArrowRightOutlined />} onClick={() => sendPtzCommand(cam.id, 'pan_right')} />
-                  </Tooltip>
-                  <Tooltip title="Zoom In">
-                    <Button size="small" icon={<ZoomInOutlined />} onClick={() => sendPtzCommand(cam.id, 'zoom_in')} />
-                  </Tooltip>
-                  <Tooltip title="Zoom Out">
-                    <Button size="small" icon={<ZoomOutOutlined />} onClick={() => sendPtzCommand(cam.id, 'zoom_out')} />
-                  </Tooltip>
-                  <Tooltip title="Reset PTZ">
-                    <Button size="small" icon={<ReloadOutlined />} onClick={() => sendPtzCommand(cam.id, 'reset')} />
-                  </Tooltip>
+                  <Space wrap style={{ width: '100%' }}>
+                    <Button
+                      type="primary"
+                      icon={<CameraOutlined />}
+                      loading={capturing}
+                      onClick={handleCaptureSnapshot}
+                      block
+                    >
+                      Ambil Snapshot & Sync Drive
+                    </Button>
+
+                    <Button
+                      icon={<VideoCameraOutlined />}
+                      loading={recording}
+                      onClick={handleRecordClip}
+                      block
+                    >
+                      Rekam Klip Video 15s
+                    </Button>
+                  </Space>
+
+                  <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                      <Text type="secondary">Auto-Record:</Text>
+                      <Text strong>{selectedCam.recordStream ? `Aktif (Tiap ${selectedCam.recordInterval}m)` : 'Nonaktif'}</Text>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4 }}>
+                      <Text type="secondary">Retensi File:</Text>
+                      <Text strong>{selectedCam.retentionDays} Hari</Text>
+                    </div>
+                  </div>
                 </Space>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
+              </Card>
+            </Col>
+          )}
+        </Row>
       )}
 
-      {/* Incident Timeline Scrubber */}
-      {selectedCamObj && (
-        <TimelineScrubber
-          cameraName={selectedCamObj.name}
-          bands={timelineBands}
-          preEventBufferFrames={preBufferCount}
-          onSelectBand={(band) => setReplayBand(band)}
-        />
+      {/* Clospol Archival Gallery & Scrubber Table */}
+      {selectedCam && (
+        <Card
+          size="small"
+          title={`Galeri Rekaman & Cloud Sync — ${selectedCam.name}`}
+          extra={
+            <Button size="small" icon={<ReloadOutlined spin={loadingGallery} />} onClick={() => fetchGallery(selectedCam.id)}>
+              Segarkan Galeri
+            </Button>
+          }
+        >
+          <Table
+            dataSource={galleryFiles}
+            columns={galleryColumns}
+            rowKey="id"
+            loading={loadingGallery}
+            pagination={{ pageSize: 6 }}
+            size="small"
+          />
+        </Card>
       )}
 
-      {/* ROI Polygon & Counting Line Interactive Drawer */}
-      <Drawer
-        title={`Editor Zona AI & Garis Hitung — ${editingCam?.name || ''}`}
-        width={700}
-        open={roiDrawerOpen}
-        onClose={() => setRoiDrawerOpen(false)}
-        extra={
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveRoiConfig}>
-            Simpan ke Kamera
-          </Button>
-        }
+      {/* Modal Add / Edit Camera */}
+      <Modal
+        title={isEdit ? 'Edit Pengaturan Kamera' : 'Tambah Kamera Baru (Clospol)'}
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={handleSaveCamera}
+        okText="Simpan Kamera"
       >
-        {editingCam && (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Form layout="inline">
-              <Form.Item label="Mode Gambar">
-                <Select
-                  value={drawMode}
-                  onChange={(v) => {
-                    setDrawMode(v);
-                    setDraftPoints([]);
-                  }}
-                  style={{ width: 220 }}
-                  options={[
-                    { value: 'ROI_INTRUSION', label: '🔴 Zona Intrusion (Terlarang)' },
-                    { value: 'ROI_LOITERING', label: '🟡 Zona Loitering (Berdiam Diri)' },
-                    { value: 'COUNTING_LINE', label: '🔵 Garis Traffic Counting' },
-                  ]}
-                />
-              </Form.Item>
-              <Form.Item label="Nama Zona/Garis">
-                <Input value={zoneName} onChange={(e) => setZoneName(e.target.value)} style={{ width: 180 }} />
-              </Form.Item>
-              <Button type="primary" onClick={handleAddDraftToCamera}>
-                Tambahkan Titik ({draftPoints.length})
-              </Button>
-            </Form>
+        <Form layout="vertical">
+          <Form.Item label="Nama Kamera" required>
+            <Input value={camName} onChange={(e) => setCamName(e.target.value)} placeholder="Contoh: Pintu Masuk Gudang" />
+          </Form.Item>
 
-            <div style={{ position: 'relative', width: '100%', maxWidth: 640, border: `1px solid ${ENTERPRISE_TOKENS.borderStrong}`, borderRadius: 8, overflow: 'hidden', background: '#000' }}>
+          <Card size="small" title="Bantuan ONVIF Discovery" style={{ background: '#f8fafc', marginBottom: 16 }}>
+            <Form.Item label="ONVIF IP / Service URL">
+              <Input value={onvifUrl} onChange={(e) => setOnvifUrl(e.target.value)} placeholder="http://192.168.1.100:80/onvif/device_service" />
+            </Form.Item>
+            <Space style={{ width: '100%' }}>
+              <Input value={onvifUser} onChange={(e) => setOnvifUser(e.target.value)} placeholder="Username" />
+              <Input.Password value={onvifPass} onChange={(e) => setOnvifPass(e.target.value)} placeholder="Password" />
+              <Button loading={testingOnvif} onClick={handleTestOnvif}>Pindai</Button>
+            </Space>
+          </Card>
+
+          <Form.Item label="Stream URL (RTSP / HLS)" required>
+            <Input value={camStreamUrl} onChange={(e) => setCamStreamUrl(e.target.value)} placeholder="rtsp://admin:pass@192.168.1.100:554/live/ch0" />
+          </Form.Item>
+
+          <Form.Item label="Snapshot URL (Opsional)">
+            <Input value={camSnapshotUrl} onChange={(e) => setCamSnapshotUrl(e.target.value)} placeholder="http://192.168.1.100/snapshot.jpg" />
+          </Form.Item>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="Perekaman Otomatis (Auto-Record)">
+                <Switch checked={camRecordStream} onChange={(v) => setCamRecordStream(v)} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="Interval Rekam (Menit)">
+                <InputNumber value={camRecordInterval} onChange={(v) => setCamRecordInterval(Number(v || 5))} min={1} max={60} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item label="Masa Retensi File (Hari)">
+            <InputNumber value={camRetentionDays} onChange={(v) => setCamRetentionDays(Number(v || 7))} min={1} max={365} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Playback Modal */}
+      <Modal
+        title={`Pemutaran Rekaman: ${playbackFile?.name || ''}`}
+        open={!!playbackFile}
+        onCancel={() => setPlaybackFile(null)}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setPlaybackFile(null)}>Tutup</Button>
+        ]}
+        width={720}
+      >
+        {playbackFile && (
+          <div>
+            {playbackFile.fileType === 'video' ? (
+              <video
+                src={playbackFile.downloadUrl}
+                controls
+                autoPlay
+                style={{ width: '100%', maxHeight: 420, background: '#000', borderRadius: 8 }}
+              />
+            ) : (
               <img
-                src={`/api/v1/cameras/${editingCam.id}/thumbnail?show_boxes=false`}
-                alt="Preview ROI"
-                style={{ width: '100%', height: 420, objectFit: 'fill', display: 'block' }}
+                src={playbackFile.downloadUrl}
+                alt={playbackFile.name}
+                style={{ width: '100%', maxHeight: 420, objectFit: 'contain', borderRadius: 8 }}
               />
-              <canvas
-                ref={canvasRef}
-                width={640}
-                height={420}
-                onClick={handleCanvasClick}
-                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: 'crosshair' }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                Klik pada gambar di atas untuk menaruh titik koordinat, lalu klik <strong>Tambahkan Titik</strong> dan <strong>Simpan ke Kamera</strong>.
-              </Text>
-              <Space>
-                <Button size="small" onClick={() => setDraftPoints([])}>Reset Titik Baru</Button>
-                <Button
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={() => setEditingCam({ ...editingCam, roi_zones: [], counting_lines: [] })}
-                >
-                  Bersihkan Semua Zona
+            )}
+            <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="mono-text">{playbackFile.name}</span>
+              {playbackFile.googleDriveUrl && (
+                <Button type="link" href={playbackFile.googleDriveUrl} target="_blank">
+                  Buka di Google Drive ↗
                 </Button>
-              </Space>
+              )}
             </div>
-          </Space>
+          </div>
         )}
-      </Drawer>
+      </Modal>
     </Space>
   );
 };
-

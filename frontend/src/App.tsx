@@ -1,57 +1,40 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   ConfigProvider,
   Layout,
   Menu,
   Breadcrumb,
   Button,
-  Badge,
   Space,
   Typography,
   Tag,
-  Popover,
-  List,
   Avatar,
-  Tooltip,
-  message,
 } from 'antd';
 import {
   DashboardOutlined,
   VideoCameraOutlined,
-  TeamOutlined,
-  AlertOutlined,
-  CloudServerOutlined,
+  GoogleOutlined,
   SettingOutlined,
-  SearchOutlined,
-  BellOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  SoundOutlined,
-  AudioMutedOutlined,
 } from '@ant-design/icons';
 import { enterpriseAntdTheme, ENTERPRISE_TOKENS } from './theme/enterpriseTheme';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/Dashboard';
 import { LiveViewPage } from './pages/LiveView';
-import { FaceGalleryPage } from './pages/FaceGallery';
-import { EventsPage } from './pages/EventsPage';
-import { StorageSyncPage } from './pages/StorageSyncPage';
+import { GoogleDrivePage } from './pages/GoogleDrivePage';
 import { SettingsPage } from './pages/SettingsPage';
-import { FaceSearchDrawer } from './components/FaceSearchDrawer';
-import { apiFetch, playEmergencySiren } from './utils/api';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
 
 const TAB_LABELS: Record<string, string> = {
-  dashboard: 'Dashboard Overview',
-  live: 'Live Multi-Cam Grid',
-  faces: 'People Gallery & Face Search',
-  events: 'Events & Incidents Log',
-  storage: 'Storage & Cloud Sync',
-  settings: 'System & Camera Settings',
+  dashboard: 'Dashboard Utama',
+  live: 'Live CCTV Matrix & Gallery',
+  gdrive: 'Google Drive Cloud Storage',
+  settings: 'Manajemen Pengguna',
 };
 
 export function App() {
@@ -62,43 +45,6 @@ export function App() {
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [collapsed, setCollapsed] = useState<boolean>(false);
-  const [faceSearchOpen, setFaceSearchOpen] = useState<boolean>(false);
-  const [targetEditCamId, setTargetEditCamId] = useState<string | null>(null);
-  const [recentAlerts, setRecentAlerts] = useState<any[]>([]);
-  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
-  const lastAlertIdRef = useRef<string | null>(null);
-
-  const fetchBellAlerts = async () => {
-    try {
-      const res = await apiFetch('/api/v1/alerts?limit=5');
-      if (res.ok) {
-        const data = await res.json();
-        setRecentAlerts(data);
-        if (data.length > 0) {
-          const newest = data[0];
-          if (
-            lastAlertIdRef.current &&
-            lastAlertIdRef.current !== newest.id &&
-            newest.severity === 'CRITICAL' &&
-            soundEnabled
-          ) {
-            playEmergencySiren();
-          }
-          lastAlertIdRef.current = newest.id;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  };
-
-  useEffect(() => {
-    if (user) {
-      fetchBellAlerts();
-      const timer = setInterval(fetchBellAlerts, 6000);
-      return () => clearInterval(timer);
-    }
-  }, [user, soundEnabled]);
 
   const handleLoginSuccess = (tokenData: any) => {
     const userData = {
@@ -117,41 +63,13 @@ export function App() {
     localStorage.removeItem('cctv_token');
   };
 
-  const alarmPopoverContent = (
-    <div style={{ width: 340 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-        <Text strong>Insiden AI Terbaru</Text>
-        <a onClick={() => setActiveTab('events')}>Lihat Semua</a>
-      </div>
-      <List
-        size="small"
-        dataSource={recentAlerts.slice(0, 4)}
-        renderItem={(item: any) => (
-          <List.Item style={{ padding: '6px 0' }}>
-            <List.Item.Meta
-              title={
-                <Space size={4}>
-                  <Tag color={item.severity === 'CRITICAL' ? 'error' : 'warning'} style={{ margin: 0 }}>
-                    {item.event_type}
-                  </Tag>
-                  <Text strong style={{ fontSize: 12 }}>{item.camera_name}</Text>
-                </Space>
-              }
-              description={<Text style={{ fontSize: 12 }}>{item.description}</Text>}
-            />
-          </List.Item>
-        )}
-      />
-    </div>
-  );
-
   return (
     <ConfigProvider theme={enterpriseAntdTheme}>
       {!user ? (
         <LoginPage onLoginSuccess={handleLoginSuccess} />
       ) : (
         <Layout style={{ minHeight: '100vh' }}>
-          {/* Left Collapsible Enterprise Sidebar */}
+          {/* Left Navigation Sidebar */}
           <Sider
             collapsible
             collapsed={collapsed}
@@ -192,10 +110,10 @@ export function App() {
               {!collapsed && (
                 <div style={{ lineHeight: 1.2 }}>
                   <Text strong style={{ fontSize: 15, color: ENTERPRISE_TOKENS.textPrimary, display: 'block' }}>
-                    CCTV NEW
+                    CLOSPOL CCTV
                   </Text>
                   <Text type="secondary" style={{ fontSize: 11 }}>
-                    Enterprise AI NVR
+                    Cloud Storage NVR
                   </Text>
                 </div>
               )}
@@ -207,17 +125,15 @@ export function App() {
               onClick={({ key }) => setActiveTab(key)}
               style={{ borderRight: 0, paddingTop: 8 }}
               items={[
-                { key: 'dashboard', icon: <DashboardOutlined />, label: 'Dashboard Overview' },
-                { key: 'live', icon: <VideoCameraOutlined />, label: 'Live Multi-Cam Grid' },
-                { key: 'faces', icon: <TeamOutlined />, label: 'People & Face Search' },
-                { key: 'events', icon: <AlertOutlined />, label: 'Events & Incidents' },
-                { key: 'storage', icon: <CloudServerOutlined />, label: 'Cloud Storage Pool' },
-                { key: 'settings', icon: <SettingOutlined />, label: 'Settings & V380 Scan' },
+                { key: 'dashboard', icon: <DashboardOutlined />, label: 'Dashboard Utama' },
+                { key: 'live', icon: <VideoCameraOutlined />, label: 'Live CCTV & Galeri' },
+                { key: 'gdrive', icon: <GoogleOutlined />, label: 'Google Drive Storage' },
+                { key: 'settings', icon: <SettingOutlined />, label: 'Manajemen Pengguna' },
               ]}
             />
           </Sider>
 
-          {/* Main Content Shell */}
+          {/* Main Layout Area */}
           <Layout>
             <Header
               style={{
@@ -238,48 +154,14 @@ export function App() {
                 />
                 <Breadcrumb
                   items={[
-                    { title: 'CCTV NEW Enterprise' },
+                    { title: 'Clospol CCTV' },
                     { title: TAB_LABELS[activeTab] || 'Overview' },
                   ]}
                 />
               </Space>
 
               <Space size="middle">
-                <Button
-                  type="primary"
-                  ghost
-                  icon={<SearchOutlined />}
-                  onClick={() => setFaceSearchOpen(true)}
-                >
-                  Vector Face Search (Qdrant)
-                </Button>
-
-                <Tooltip title={soundEnabled ? 'Suara Sirine Kritis Aktif (Klik untuk Mute)' : 'Suara Sirine Kritis Dibisukan'}>
-                  <Button
-                    shape="circle"
-                    type={soundEnabled ? 'primary' : 'default'}
-                    ghost={soundEnabled}
-                    icon={soundEnabled ? <SoundOutlined /> : <AudioMutedOutlined />}
-                    onClick={() => {
-                      const next = !soundEnabled;
-                      setSoundEnabled(next);
-                      if (next) {
-                        playEmergencySiren();
-                        message.info('Sirine peringatan kritis diaktifkan');
-                      } else {
-                        message.info('Sirine peringatan kritis dibisukan');
-                      }
-                    }}
-                  />
-                </Tooltip>
-
-                <Popover content={alarmPopoverContent} trigger="click" placement="bottomRight">
-                  <Badge count={recentAlerts.length} size="small">
-                    <Button shape="circle" icon={<BellOutlined />} />
-                  </Badge>
-                </Popover>
-
-                <Space size="small" style={{ paddingLeft: 8, borderLeft: `1px solid ${ENTERPRISE_TOKENS.borderLight}` }}>
+                <Space size="small" style={{ paddingLeft: 8 }}>
                   <Avatar size="small" style={{ backgroundColor: ENTERPRISE_TOKENS.primaryColor }} icon={<UserOutlined />} />
                   <Text strong style={{ fontSize: 13 }}>{user.full_name}</Text>
                   <Tag color="blue" style={{ margin: 0 }}>{user.role}</Tag>
@@ -290,35 +172,11 @@ export function App() {
 
             <Content style={{ padding: 20, background: ENTERPRISE_TOKENS.bgApp, overflowY: 'auto' }}>
               {activeTab === 'dashboard' && <DashboardPage onNavigate={(tab) => setActiveTab(tab)} />}
-              {activeTab === 'live' && (
-                <LiveViewPage
-                  initialEditCameraId={targetEditCamId}
-                  onClearInitialEditCameraId={() => setTargetEditCamId(null)}
-                />
-              )}
-              {activeTab === 'faces' && <FaceGalleryPage onOpenSearch={() => setFaceSearchOpen(true)} />}
-              {activeTab === 'events' && (
-                <EventsPage
-                  onCriticalTriggered={() => {
-                    if (soundEnabled) playEmergencySiren();
-                    fetchBellAlerts();
-                  }}
-                />
-              )}
-              {activeTab === 'storage' && <StorageSyncPage />}
-              {activeTab === 'settings' && (
-                <SettingsPage
-                  onOpenRoiDrawer={(cam) => {
-                    setTargetEditCamId(cam.id);
-                    setActiveTab('live');
-                  }}
-                />
-              )}
+              {activeTab === 'live' && <LiveViewPage />}
+              {activeTab === 'gdrive' && <GoogleDrivePage />}
+              {activeTab === 'settings' && <SettingsPage />}
             </Content>
           </Layout>
-
-          {/* Google Photos-style Face Search Drawer */}
-          <FaceSearchDrawer open={faceSearchOpen} onClose={() => setFaceSearchOpen(false)} />
         </Layout>
       )}
     </ConfigProvider>
