@@ -6,3 +6,6 @@ venv/
 .venv/
 CCTV REFF PROJECT/
 *.log
+*.db
+backend/media/
+backend/storage/
