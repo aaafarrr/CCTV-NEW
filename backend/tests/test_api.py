@@ -1,4 +1,9 @@
+import os
+import sys
 import asyncio
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from httpx import AsyncClient, ASGITransport
 from app.main import app, startup_event
 from app.services.camera_stream import stream_manager
@@ -33,18 +38,30 @@ async def run_suite():
         )
         assert r_forbidden.status_code == 403, f"Expected 403 for operator creating user, got {r_forbidden.status_code}"
 
-        # 4. Cameras, PTZ, Timeline & V380 Discovery
+        # 4. Cameras, PTZ, Timeline, Pre-Event Replay, V380 & ONVIF Discovery
         r_cams = await client.get("/api/v1/cameras")
         assert r_cams.status_code == 200 and len(r_cams.json()) >= 4
 
-        r_ptz = await client.post("/api/v1/cameras/cam_1/ptz", json={"action": "zoom_in", "step": 0.2})
+        r_ptz_unauth = await client.post("/api/v1/cameras/cam_1/ptz", json={"action": "zoom_in", "step": 0.2})
+        assert r_ptz_unauth.status_code == 401
+
+        r_ptz = await client.post("/api/v1/cameras/cam_1/ptz", headers=headers, json={"action": "zoom_in", "step": 0.2})
         assert r_ptz.status_code == 200 and r_ptz.json()["ptz"]["zoom"] > 1.0
+
+        r_del_cam_op = await client.delete("/api/v1/cameras/cam_1", headers={"Authorization": f"Bearer {op_token}"})
+        assert r_del_cam_op.status_code == 403
 
         r_tl = await client.get("/api/v1/cameras/cam_1/timeline")
         assert r_tl.status_code == 200 and len(r_tl.json()["bands"]) >= 4
 
+        replay_frames = stream_manager.get_pre_event_replay_frames("cam_1", label="TEST REPLAY")
+        assert len(replay_frames) > 0 and replay_frames[0].startswith(b"\xff\xd8")
+
         r_v380 = await client.get("/api/v1/cameras/discover/v380")
         assert r_v380.status_code == 200 and len(r_v380.json()["devices"]) >= 2
+
+        r_onvif = await client.get("/api/v1/cameras/discover/onvif")
+        assert r_onvif.status_code == 200 and len(r_onvif.json()) >= 2
 
         # 5. Security Boundary Checks (SSRF & Path Traversal)
         r_ssrf = await client.put(
@@ -57,13 +74,16 @@ async def run_suite():
         r_trav = await client.get("/api/v1/cameras/snapshots/download/..%2Fconfig.py")
         assert r_trav.status_code in (400, 404)
 
-        # 6. Simulate & Persist Fall Detection (DeepCamera Skill)
+        # 6. Simulate & Persist Fall Detection + Auto-Sync to Cloud Storage Pool
         r_fall = await client.post(
             "/api/v1/alerts/simulate",
             headers=headers,
             json={"event_type": "FALL_DETECTED", "camera_id": "cam_1"}
         )
-        assert r_fall.status_code == 200 and r_fall.json()["event_type"] == "FALL_DETECTED"
+        assert r_fall.status_code == 200
+        fall_data = r_fall.json()
+        assert fall_data["event_type"] == "FALL_DETECTED"
+        assert "cloud_sync_job" in fall_data and fall_data["cloud_sync_job"]["status"] == "COMPLETED"
 
         r_alerts = await client.get("/api/v1/alerts")
         assert r_alerts.status_code == 200
@@ -85,3 +105,4 @@ async def run_suite():
 
 if __name__ == "__main__":
     asyncio.run(run_suite())
+

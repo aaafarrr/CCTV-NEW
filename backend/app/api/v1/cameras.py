@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse, FileResponse, Response
 from pydantic import BaseModel, Field
 from app.services.camera_stream import stream_manager
 from app.services.v380_scanner import v380_scanner
-from app.core.security import validate_safe_id, validate_safe_filename, validate_stream_url, get_current_user
+from app.core.security import validate_safe_id, validate_safe_filename, validate_stream_url, get_current_user, require_admin
 
 router = APIRouter(prefix="/cameras", tags=["Cameras & PTZ"])
 
@@ -46,28 +46,7 @@ async def list_cameras():
 
 @router.get("/discover/onvif")
 async def discover_onvif_cameras():
-    return [
-        {
-            "ip": "192.168.1.105",
-            "port": 554,
-            "device_id": "ONVIF-HIK-4K01",
-            "hw_model": "DS-2CD2143G2-I",
-            "manufacturer": "Hikvision Enterprise",
-            "rtsp_url": "synthetic_lobby",
-            "sd_patch_status": "Native ONVIF Profile S/T",
-            "source": "WS-Discovery Multicast 3702"
-        },
-        {
-            "ip": "192.168.1.109",
-            "port": 554,
-            "device_id": "ONVIF-DAH-PTZ2",
-            "hw_model": "IPC-HFW2431S",
-            "manufacturer": "Dahua Technology",
-            "rtsp_url": "synthetic_parking",
-            "sd_patch_status": "Native ONVIF Profile S",
-            "source": "WS-Discovery Multicast 3702"
-        }
-    ]
+    return v380_scanner.scan_onvif_lan(timeout=0.8, include_demo=True)
 
 @router.get("/discover/v380")
 async def discover_v380_cameras():
@@ -130,7 +109,7 @@ async def update_camera(camera_id: str, config: CameraConfigUpdate, _: Dict[str,
     return {"status": "success", "message": f"Konfigurasi kamera {cid} berhasil disimpan"}
 
 @router.delete("/{camera_id}")
-async def delete_camera(camera_id: str, _: Dict[str, Any] = Depends(get_current_user)):
+async def delete_camera(camera_id: str, _: Dict[str, Any] = Depends(require_admin)):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
@@ -147,7 +126,7 @@ async def delete_camera(camera_id: str, _: Dict[str, Any] = Depends(get_current_
     return {"status": "success", "message": f"Kamera {cid} dihapus"}
 
 @router.post("/{camera_id}/ptz")
-async def control_camera_ptz(camera_id: str, cmd: PTZCommand):
+async def control_camera_ptz(camera_id: str, cmd: PTZCommand, _: Dict[str, Any] = Depends(get_current_user)):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
@@ -166,6 +145,41 @@ async def get_camera_timeline(camera_id: str):
         "pre_event_buffer_frames": len(stream_manager.pre_event_buffers.get(cid, [])),
         "bands": bands
     }
+
+@router.get("/{camera_id}/replay")
+async def replay_pre_event_buffer(
+    camera_id: str,
+    request: Request,
+    label: str = Query("INSIDEN PERIMETER", description="Label insiden pada OSD replay")
+):
+    cid = validate_safe_id(camera_id, "Camera ID")
+    if cid not in stream_manager.active_streams:
+        raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
+
+    frames = stream_manager.get_pre_event_replay_frames(cid, label=label)
+
+    async def replay_generator():
+        idx = 0
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                if frames:
+                    jpg = frames[idx % len(frames)]
+                    idx += 1
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+                    )
+                await asyncio.sleep(0.08)
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    return StreamingResponse(
+        replay_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate, max-age=0"}
+    )
 
 @router.get("/{camera_id}/stream")
 async def video_feed(
@@ -241,7 +255,7 @@ async def get_camera_thumbnail(
     )
 
 @router.post("/{camera_id}/snapshot")
-async def take_camera_snapshot(camera_id: str):
+async def take_camera_snapshot(camera_id: str, _: Dict[str, Any] = Depends(get_current_user)):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")

@@ -13,6 +13,7 @@ from app.services.ai.detector import detector_tracker
 from app.services.ai.counting import counting_engine
 from app.services.ai.anomaly import anomaly_engine
 from app.services.ai.face_engine import face_engine
+from app.services.storage_gateway import storage_gateway
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;5000000"
 
@@ -35,6 +36,7 @@ class CameraStreamManager:
         self.pre_event_buffers: Dict[str, deque] = {}
         self.timeline_bands: Dict[str, List[Dict[str, Any]]] = {}
         self.recent_runtime_alerts: deque = deque(maxlen=40)
+        self.last_cloud_sync_ts: Dict[str, float] = {}
         self.is_running = True
         self._load_persistent_cameras()
 
@@ -383,12 +385,13 @@ class CameraStreamManager:
             )
             for al in alerts:
                 alert_id = f"rt_{int(time.time()*1000)}_{camera_id}"
+                snap_url = self._persist_alert_sqlite(alert_id, al, frame=box_frame)
                 self.recent_runtime_alerts.appendleft({
                     "id": alert_id,
                     "timestamp": time.time(),
+                    "snapshot_url": snap_url,
                     **al
                 })
-                self._persist_alert_sqlite(alert_id, al)
 
         # 4. Face Recognition
         faces = []
@@ -533,36 +536,110 @@ class CameraStreamManager:
 
         return frame
 
-    def _persist_alert_sqlite(self, alert_id: str, al: Dict[str, Any]):
-        """Persist real-time alert directly into SQLite security_events table"""
+    def get_pre_event_replay_frames(self, camera_id: str, label: str = "INSIDEN") -> List[bytes]:
+        """Return encoded JPEG frames from the 75-frame (~5s) circular pre-event buffer for scrubber replay."""
+        buf = list(self.pre_event_buffers.get(camera_id, []))
+        if not buf:
+            buf = [self._generate_synthetic_frame(camera_id, "synthetic_lobby") for _ in range(25)]
+        total = len(buf)
+        encoded_frames: List[bytes] = []
+        for idx, raw_frame in enumerate(buf):
+            f = raw_frame.copy()
+            h, w = f.shape[:2]
+            sec_offset = round(((idx - total + 1) / max(1, total)) * 5.0, 1)
+            cv2.rectangle(f, (0, 0), (w, 36), (30, 41, 59), -1)
+            cv2.circle(f, (18, 18), 6, (68, 68, 239), -1)
+            cv2.putText(
+                f,
+                f"REPLAY PRE-ALARM BUFFER ({sec_offset:+.1f}s) | {label[:38]}",
+                (32, 23),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (255, 255, 255),
+                1
+            )
+            ret, jpg = cv2.imencode(".jpg", f, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if ret:
+                encoded_frames.append(jpg.tobytes())
+        return encoded_frames
+
+    def _persist_alert_sqlite(self, alert_id: str, al: Dict[str, Any], frame: Optional[np.ndarray] = None) -> str:
+        """Persist real-time alert + snapshot to disk, SQLite, Timeline Scrubber, and Clospol Cloud Pool"""
+        cam_id = al.get("camera_id", "cam_1")
+        cam_name = al.get("camera_name", "Kamera Utama")
+        evt_type = al.get("event_type", "INTRUSION")
+        sev = al.get("severity", "CRITICAL")
+
+        snap_dir = os.path.join(STORAGE_DIR, "snapshots")
+        os.makedirs(snap_dir, exist_ok=True)
+        snap_filename = f"{alert_id}.jpg"
+        snap_path = os.path.join(snap_dir, snap_filename)
+        snap_url = f"/api/v1/cameras/{cam_id}/thumbnail?show_boxes=true"
+
+        target_frame = frame if frame is not None else self.active_streams.get(cam_id, {}).get("latest_frame")
+        if target_frame is not None:
+            try:
+                if cv2.imwrite(snap_path, target_frame):
+                    snap_url = f"/api/v1/cameras/snapshots/download/{snap_filename}"
+            except Exception:
+                pass
+
+        # Append to 24h Timeline Scrubber bands
+        bands = self.timeline_bands.setdefault(cam_id, [])
+        color = "#ef4444" if sev == "CRITICAL" else "#f59e0b"
+        bands.append({
+            "id": alert_id,
+            "hour_offset": -0.08,
+            "duration_min": 6,
+            "type": "INTRUSION" if evt_type != "LOITERING" else "LOITERING",
+            "color": color,
+            "label": al.get("description", evt_type)[:48],
+            "timestamp": time.time()
+        })
+
+        # Auto-Sync to Cloud Storage Pool (Clospol) on policy match with 15s cooldown per camera
+        now = time.time()
+        policy = storage_gateway.policy
+        if (
+            policy.get("auto_tiering_enabled", True)
+            and sev in policy.get("sync_on_severity", ["CRITICAL", "WARNING"])
+            and now - self.last_cloud_sync_ts.get(cam_id, 0.0) >= 15.0
+        ):
+            self.last_cloud_sync_ts[cam_id] = now
+            storage_gateway.trigger_cloud_sync(
+                camera_name=cam_name,
+                reason=f"Auto-Sync [{sev}] {evt_type} ({snap_filename})"
+            )
+
         db_path = os.path.join(BASE_DIR, "cctv_enterprise.db")
-        if not os.path.exists(db_path):
-            return
-        try:
-            with sqlite3.connect(db_path, timeout=2.0) as conn:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO security_events
-                    (id, camera_id, camera_name, event_type, severity, description, ai_summary, snapshot_url, cloud_synced, metadata_json, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        alert_id,
-                        al.get("camera_id", "cam_1"),
-                        al.get("camera_name", "Kamera Utama"),
-                        al.get("event_type", "INTRUSION"),
-                        al.get("severity", "CRITICAL"),
-                        al.get("description", ""),
-                        al.get("ai_summary", ""),
-                        f"/api/v1/cameras/{al.get('camera_id', 'cam_1')}/thumbnail?show_boxes=true",
-                        1,
-                        json.dumps(al.get("metadata", {})),
-                        datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f"),
+        if os.path.exists(db_path):
+            try:
+                with sqlite3.connect(db_path, timeout=2.0) as conn:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO security_events
+                        (id, camera_id, camera_name, event_type, severity, description, ai_summary, snapshot_url, cloud_synced, metadata_json, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            alert_id,
+                            cam_id,
+                            cam_name,
+                            evt_type,
+                            sev,
+                            al.get("description", ""),
+                            al.get("ai_summary", ""),
+                            snap_url,
+                            1,
+                            json.dumps(al.get("metadata", {})),
+                            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                        )
                     )
-                )
-                conn.commit()
-        except Exception as e:
-            logger.debug(f"SQLite alert persist skipped: {e}")
+                    conn.commit()
+            except Exception as e:
+                logger.debug(f"SQLite alert persist skipped: {e}")
+
+        return snap_url
 
     def update_camera_config(
         self,

@@ -19,7 +19,7 @@ interface TimelineScrubberProps {
   cameraName: string;
   bands: TimelineBand[];
   preEventBufferFrames?: number;
-  onSelectBand?: (band: TimelineBand) => void;
+  onSelectBand?: (band: TimelineBand | null) => void;
 }
 
 export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
@@ -71,6 +71,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
             onClick={() => {
               setPlayheadPct(99);
               setSelectedEvent(null);
+              onSelectBand?.(null);
             }}
           >
             LIVE
@@ -173,7 +174,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
               Playback Titik Insiden [{selectedEvent.type}]: {selectedEvent.label} ({new Date(selectedEvent.timestamp * 1000).toLocaleTimeString('id-ID')})
             </Text>
           </Space>
-          <Button size="small" type="link" onClick={() => { setSelectedEvent(null); setPlayheadPct(99); }}>
+          <Button size="small" type="link" onClick={() => { setSelectedEvent(null); setPlayheadPct(99); onSelectBand?.(null); }}>
             Kembali ke Live Feed
           </Button>
         </div>

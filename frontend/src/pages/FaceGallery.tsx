@@ -78,7 +78,7 @@ export const FaceGalleryPage: React.FC<FaceGalleryProps> = ({ onOpenSearch }) =>
       fd.append('is_watchlist', String(regWatchlist));
       fd.append('file', regFile);
 
-      const res = await fetch('/api/v1/search/register-identity', {
+      const res = await apiFetch('/api/v1/search/register-identity', {
         method: 'POST',
         body: fd,
       });

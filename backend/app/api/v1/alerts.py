@@ -8,9 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete
 from app.core.database import get_db, AsyncSessionLocal
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.models.event import SecurityEvent
-from app.services.camera_stream import stream_manager
+from app.services.camera_stream import stream_manager, STORAGE_DIR
+from app.services.storage_gateway import storage_gateway
+import os
+import cv2
 
 router = APIRouter(prefix="/alerts", tags=["Alerts & Incidents"])
 
@@ -177,6 +180,26 @@ async def simulate_security_incident(
         metadata_json={"simulated": True, "camera_id": payload.camera_id},
         timestamp=datetime.utcnow()
     )
+    if cam_data and cam_data.get("latest_frame") is not None:
+        snap_dir = os.path.join(STORAGE_DIR, "snapshots")
+        os.makedirs(snap_dir, exist_ok=True)
+        snap_file = f"{evt_id}.jpg"
+        if cv2.imwrite(os.path.join(snap_dir, snap_file), cam_data["latest_frame"]):
+            evt.snapshot_url = f"/api/v1/cameras/snapshots/download/{snap_file}"
+
+    sync_job = storage_gateway.trigger_cloud_sync(
+        camera_name=cam_name,
+        reason=f"Auto-Sync [{sev}] {payload.event_type} ({evt_id})"
+    )
+    stream_manager.timeline_bands.setdefault(payload.camera_id, []).append({
+        "id": evt_id,
+        "hour_offset": -0.05,
+        "duration_min": 8,
+        "type": "INTRUSION",
+        "color": "#ef4444",
+        "label": desc[:48],
+        "timestamp": time.time()
+    })
     db.add(evt)
     await db.commit()
     return {
@@ -186,7 +209,9 @@ async def simulate_security_incident(
         "severity": sev,
         "camera_name": cam_name,
         "description": desc,
-        "ai_summary": summary
+        "ai_summary": summary,
+        "snapshot_url": evt.snapshot_url,
+        "cloud_sync_job": sync_job
     }
 
 @router.delete("/{alert_id}")
@@ -208,7 +233,7 @@ async def delete_alert(
 
 @router.delete("")
 async def clear_all_alerts(
-    _: Dict[str, Any] = Depends(get_current_user),
+    _: Dict[str, Any] = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
     stream_manager.recent_runtime_alerts.clear()

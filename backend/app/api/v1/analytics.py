@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.security import get_current_user
 from app.models.event import SecurityEvent, TrafficCountLog
 from app.services.ai.counting import counting_engine
 from app.services.camera_stream import stream_manager
@@ -62,7 +63,7 @@ async def get_system_config():
     }
 
 @router.put("/config")
-async def update_system_config(config: SystemConfigUpdate):
+async def update_system_config(config: SystemConfigUpdate, _: dict = Depends(get_current_user)):
     settings.TIMEZONE_OFFSET_HOURS = config.timezone_offset_hours
     settings.TIMEZONE_NAME = config.timezone_name
     return {

@@ -2,7 +2,7 @@ from typing import Dict, Any, List
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from app.services.storage_gateway import storage_gateway
-from app.core.security import validate_safe_id, get_current_user
+from app.core.security import validate_safe_id, get_current_user, require_admin
 
 router = APIRouter(prefix="/storage", tags=["Multi-Cloud Storage Pool (Clospol)"])
 
@@ -31,7 +31,7 @@ async def get_storage_overview() -> Dict[str, Any]:
     return storage_gateway.get_pool_overview()
 
 @router.post("/providers")
-async def add_storage_provider(payload: ProviderCreate, _: Dict[str, Any] = Depends(get_current_user)):
+async def add_storage_provider(payload: ProviderCreate, _: Dict[str, Any] = Depends(require_admin)):
     return storage_gateway.add_provider(
         name=payload.name,
         ptype=payload.type,
@@ -49,7 +49,7 @@ async def toggle_storage_provider(provider_id: str, _: Dict[str, Any] = Depends(
         raise HTTPException(status_code=404, detail="Storage provider tidak ditemukan")
 
 @router.delete("/providers/{provider_id}")
-async def delete_storage_provider(provider_id: str, _: Dict[str, Any] = Depends(get_current_user)):
+async def delete_storage_provider(provider_id: str, _: Dict[str, Any] = Depends(require_admin)):
     pid = validate_safe_id(provider_id, "Provider ID")
     if pid == "prov_local_nvme":
         raise HTTPException(status_code=400, detail="Local NVMe Buffer utama tidak dapat dihapus")

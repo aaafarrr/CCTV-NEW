@@ -35,3 +35,4 @@ export function playEmergencySiren() {
     // AudioContext blocked or unsupported
   }
 }
+

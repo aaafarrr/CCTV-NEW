@@ -104,12 +104,10 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
     }
     const targetId = camFormId.trim() || `cam_${Date.now().toString().slice(-4)}`;
     try {
-      const token = localStorage.getItem('cctv_token');
-      const res = await fetch(`/api/v1/cameras/${targetId}`, {
+      const res = await apiFetch(`/api/v1/cameras/${targetId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           name: camName.trim(),
@@ -135,7 +133,12 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
   };
 
   const handleDeleteCamera = async (id: string) => {
-    await apiFetch(`/api/v1/cameras/${id}`, { method: 'DELETE' });
+    const res = await apiFetch(`/api/v1/cameras/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      message.error(err.detail || 'Hanya ADMIN yang dapat menghapus kamera');
+      return;
+    }
     message.success('Kamera dihapus');
     fetchCameras();
   };
@@ -154,12 +157,10 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
       return;
     }
     try {
-      const token = localStorage.getItem('cctv_token');
-      const res = await fetch('/api/v1/auth/users', {
+      const res = await apiFetch('/api/v1/auth/users', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           username: newUsername.trim(),
@@ -180,6 +181,32 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
       fetchUsers();
     } catch (e: any) {
       message.error(e.message);
+    }
+  };
+
+  const handleChangeUserRole = async (username: string, role: string) => {
+    const res = await apiFetch(`/api/v1/auth/users/${username}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    });
+    if (res.ok) {
+      message.success(`Peran ${username} diubah ke ${role}`);
+      fetchUsers();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      message.error(err.detail || 'Gagal mengubah peran');
+    }
+  };
+
+  const handleDeleteUser = async (username: string) => {
+    const res = await apiFetch(`/api/v1/auth/users/${username}`, { method: 'DELETE' });
+    if (res.ok) {
+      message.success(`Pengguna ${username} dihapus`);
+      fetchUsers();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      message.error(err.detail || 'Gagal menghapus pengguna');
     }
   };
 
@@ -325,7 +352,36 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
                     { title: 'Username', dataIndex: 'username', key: 'username', render: (t: string) => <Text strong>{t}</Text> },
                     { title: 'Nama Lengkap', dataIndex: 'full_name', key: 'full_name' },
                     { title: 'Email', dataIndex: 'email', key: 'email' },
-                    { title: 'Peran (Role)', dataIndex: 'role', key: 'role', render: (r: string) => <Tag color={r === 'ADMIN' ? 'blue' : 'green'}>{r}</Tag> },
+                    {
+                      title: 'Peran (Role)',
+                      dataIndex: 'role',
+                      key: 'role',
+                      render: (r: string, rec: any) =>
+                        rec.username === 'admin' ? (
+                          <Tag color="blue">{r} (Root)</Tag>
+                        ) : (
+                          <Select
+                            size="small"
+                            value={r}
+                            onChange={(val) => handleChangeUserRole(rec.username, val)}
+                            style={{ width: 120 }}
+                            options={[
+                              { value: 'ADMIN', label: 'ADMIN' },
+                              { value: 'OPERATOR', label: 'OPERATOR' },
+                            ]}
+                          />
+                        ),
+                    },
+                    {
+                      title: 'Aksi',
+                      key: 'action',
+                      render: (_: any, rec: any) =>
+                        rec.username === 'admin' ? null : (
+                          <Popconfirm title={`Hapus pengguna ${rec.username}?`} onConfirm={() => handleDeleteUser(rec.username)}>
+                            <Button size="small" danger icon={<DeleteOutlined />} />
+                          </Popconfirm>
+                        ),
+                    },
                   ]}
                 />
               </Space>

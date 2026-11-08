@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Drawer, Button, Slider, Tag, Card, Empty, Spin, Typography, Space, Alert, message } from 'antd';
 import { SearchOutlined, UploadOutlined, WarningOutlined, CheckCircleOutlined, VideoCameraOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { ENTERPRISE_TOKENS } from '../theme/enterpriseTheme';
+import { apiFetch } from '../utils/api';
 
 const { Text, Title } = Typography;
 
@@ -39,7 +40,7 @@ export const FaceSearchDrawer: React.FC<FaceSearchDrawerProps> = ({ open, onClos
       formData.append('file', fileToSearch);
       formData.append('threshold', String(threshold));
 
-      const res = await fetch('/api/v1/search/by-image', {
+      const res = await apiFetch('/api/v1/search/by-image', {
         method: 'POST',
         body: formData,
       });

@@ -51,6 +51,7 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
   const [showBoxes, setShowBoxes] = useState<boolean>(true);
   const [timelineBands, setTimelineBands] = useState<TimelineBand[]>([]);
   const [preBufferCount, setPreBufferCount] = useState<number>(75);
+  const [replayBand, setReplayBand] = useState<TimelineBand | null>(null);
 
   // ROI & Counting Line Drawer State
   const [roiDrawerOpen, setRoiDrawerOpen] = useState<boolean>(false);
@@ -110,7 +111,7 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
 
   const sendPtzCommand = async (camId: string, action: string) => {
     try {
-      const res = await fetch(`/api/v1/cameras/${camId}/ptz`, {
+      const res = await apiFetch(`/api/v1/cameras/${camId}/ptz`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, step: 0.18 }),
@@ -128,7 +129,7 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
 
   const handleTakeSnapshot = async (camId: string, camName: string) => {
     try {
-      const res = await fetch(`/api/v1/cameras/${camId}/snapshot`, { method: 'POST' });
+      const res = await apiFetch(`/api/v1/cameras/${camId}/snapshot`, { method: 'POST' });
       if (!res.ok) throw new Error('Snapshot gagal');
       const data = await res.json();
       message.success(`Snapshot ${camName} tersimpan (${data.filename})`);
@@ -394,12 +395,39 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
               }
             >
               {/* Pure Black Video Surface */}
-              <div className="cctv-video-surface" style={{ aspectRatio: '16 / 10' }}>
+              <div className="cctv-video-surface" style={{ aspectRatio: '16 / 10', position: 'relative' }}>
                 <img
-                  src={`/api/v1/cameras/${cam.id}/stream?show_boxes=${showBoxes}`}
+                  src={
+                    isSelected && replayBand
+                      ? `/api/v1/cameras/${cam.id}/replay?label=${encodeURIComponent(replayBand.label)}`
+                      : `/api/v1/cameras/${cam.id}/stream?show_boxes=${showBoxes}`
+                  }
                   alt={cam.name}
                   style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                 />
+                {isSelected && replayBand && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      bottom: 8,
+                      right: 8,
+                      background: 'rgba(239, 68, 68, 0.92)',
+                      color: '#fff',
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <span>⏪ REPLAY BUFFER (-5s): {replayBand.type}</span>
+                    <Button size="small" onClick={(e) => { e.stopPropagation(); setReplayBand(null); }}>
+                      Live
+                    </Button>
+                  </div>
+                )}
               </div>
 
               {/* Quick PTZ & Telemetry Bar below video */}
@@ -454,6 +482,7 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
           cameraName={selectedCamObj.name}
           bands={timelineBands}
           preEventBufferFrames={preBufferCount}
+          onSelectBand={(band) => setReplayBand(band)}
         />
       )}
 

@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from app.services.face_search_service import face_search_service
+from app.core.security import get_current_user
 
 router = APIRouter(prefix="/search", tags=["Google Photos Vector Search"])
 
@@ -9,7 +10,8 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB limit at trust boundary
 @router.post("/by-image", response_model=List[Dict[str, Any]])
 async def search_faces_by_image(
     file: UploadFile = File(...),
-    threshold: float = Form(0.25)
+    threshold: float = Form(0.25),
+    _: Dict[str, Any] = Depends(get_current_user)
 ):
     try:
         contents = await file.read()
@@ -27,7 +29,8 @@ async def register_identity(
     name: str = Form(...),
     is_watchlist: bool = Form(False),
     notes: str = Form(""),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    _: Dict[str, Any] = Depends(get_current_user)
 ):
     try:
         contents = await file.read()

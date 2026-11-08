@@ -16,3 +16,4 @@ Write-Host ""
 Write-Host "Servers launched in separate windows!" -ForegroundColor Yellow
 Write-Host "-> Frontend UI : http://localhost:3000 (Login: admin / admin123)"
 Write-Host "-> Backend Docs: http://localhost:8000/docs"
+
