@@ -9,3 +9,6 @@ CCTV REFF PROJECT/
 *.db
 backend/media/
 backend/storage/
+
+*.pt
+*.onnx

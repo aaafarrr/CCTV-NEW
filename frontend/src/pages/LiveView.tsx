@@ -329,13 +329,21 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
       </Card>
 
       {/* Adaptive Video Grid */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
-          gap: 14,
-        }}
-      >
+      {displayedCameras.length === 0 ? (
+        <Card style={{ textAlign: 'center', padding: '40px 20px' }}>
+          <Title level={4} type="secondary">Belum Ada Kamera Terdaftar</Title>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+            Tambahkan kamera RTSP atau gunakan pemindai ONVIF/V380 pada menu Pengaturan Kamera.
+          </Text>
+        </Card>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
+            gap: 14,
+          }}
+        >
         {displayedCameras.map((cam) => {
           const isSelected = cam.id === selectedCamId;
           return (
@@ -475,6 +483,7 @@ export const LiveViewPage: React.FC<LiveViewProps> = ({
           );
         })}
       </div>
+      )}
 
       {/* Incident Timeline Scrubber */}
       {selectedCamObj && (

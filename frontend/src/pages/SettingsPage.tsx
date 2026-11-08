@@ -405,20 +405,12 @@ export const SettingsPage: React.FC<SettingsProps> = ({ onOpenRoiDrawer }) => {
           <Form.Item label="Lokasi Pemasangan">
             <Input value={camLocation} onChange={(e) => setCamLocation(e.target.value)} placeholder="Contoh: Lantai 2 - Ruang Server" />
           </Form.Item>
-          <Form.Item label="Sumber Stream (RTSP URL atau Simulator AI)">
-            <Select
+          <Form.Item label="Sumber Stream (RTSP URL)">
+            <Input
               value={camStreamUrl}
-              onChange={(v) => setCamStreamUrl(v)}
-              options={[
-                { value: 'synthetic_lobby', label: 'Simulator AI: Lobby Utama (People & Face)' },
-                { value: 'synthetic_parking', label: 'Simulator AI: Area Parkir (Vehicles & Loitering)' },
-                { value: 'synthetic_gate', label: 'Simulator AI: Gerbang Kargo V380 (Trucks)' },
-                { value: 'synthetic_warehouse', label: 'Simulator AI: Gudang & Brankas (Intrusion)' },
-              ]}
+              onChange={(e) => setCamStreamUrl(e.target.value)}
+              placeholder="rtsp://admin:password@192.168.1.100:554/live/ch0"
             />
-          </Form.Item>
-          <Form.Item label="Atau Masukkan RTSP URL Kustom (rtsp://...)">
-            <Input value={camStreamUrl} onChange={(e) => setCamStreamUrl(e.target.value)} />
           </Form.Item>
           <Space size="large">
             <Form.Item label="Traffic Counting">

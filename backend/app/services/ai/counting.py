@@ -13,17 +13,17 @@ class TrafficCountingEngine:
     def _get_camera_counters(self, camera_id: str) -> Dict[str, int]:
         if camera_id not in self.counters:
             self.counters[camera_id] = {
-                "people_in": 12 if camera_id == "cam_1" else 5,
-                "people_out": 8 if camera_id == "cam_1" else 3,
-                "vehicles_in": 18 if camera_id in ("cam_2", "cam_3") else 2,
-                "vehicles_out": 14 if camera_id in ("cam_2", "cam_3") else 1,
+                "people_in": 0,
+                "people_out": 0,
+                "vehicles_in": 0,
+                "vehicles_out": 0,
             }
         if camera_id not in self.vehicle_types:
             self.vehicle_types[camera_id] = {
-                "cars": 10 if camera_id in ("cam_2", "cam_3") else 1,
-                "motorcycles": 5 if camera_id in ("cam_2", "cam_3") else 1,
-                "trucks": 2 if camera_id == "cam_3" else 0,
-                "buses": 1 if camera_id == "cam_2" else 0,
+                "cars": 0,
+                "motorcycles": 0,
+                "trucks": 0,
+                "buses": 0,
             }
         return self.counters[camera_id]
 
@@ -45,12 +45,8 @@ class TrafficCountingEngine:
         history = self.track_history.setdefault(camera_id, {})
         counted = self.counted_tracks.setdefault(camera_id, set())
 
-        active_lines = counting_lines or [{
-            "id": "def_line_1",
-            "name": "Garis Sensor Utama",
-            "start": {"x": 40, "y": 280},
-            "end": {"x": 600, "y": 280}
-        }]
+        if not counting_lines:
+            return counts
 
         for obj in detections:
             track_id = obj["id"]
@@ -59,16 +55,16 @@ class TrafficCountingEngine:
 
             if track_id in history:
                 prev_center = history[track_id]
-                for line in active_lines:
+                for line in counting_lines:
                     line_id = line.get("id", "line_1")
                     count_key = f"{line_id}_{track_id}"
                     if count_key not in counted:
-                        p1 = self._parse_pt(line.get("start"), [40, 280])
-                        p2 = self._parse_pt(line.get("end"), [600, 280])
+                        p1 = self._parse_pt(line.get("start"), [0, 0])
+                        p2 = self._parse_pt(line.get("end"), [0, 0])
                         direction = self._check_line_direction(prev_center, curr_center, p1, p2)
                         if direction:
                             counted.add(count_key)
-                            if len(counted) > 500:
+                            if len(counted) > 1000:
                                 counted.clear()
                             if obj_class == "person":
                                 counts["people_in" if direction == "IN" else "people_out"] += 1
@@ -78,6 +74,8 @@ class TrafficCountingEngine:
                                     vtypes["trucks"] += 1
                                 elif obj_class == "motorcycle":
                                     vtypes["motorcycles"] += 1
+                                elif obj_class == "bus":
+                                    vtypes["buses"] += 1
                                 else:
                                     vtypes["cars"] += 1
 
@@ -87,16 +85,16 @@ class TrafficCountingEngine:
 
     def _check_line_direction(self, prev_pt: List[int], curr_pt: List[int], p1: List[int], p2: List[int]) -> Optional[str]:
         try:
-            min_x = min(p1[0], p2[0]) - 25
-            max_x = max(p1[0], p2[0]) + 25
+            min_x = min(p1[0], p2[0]) - 20
+            max_x = max(p1[0], p2[0]) + 20
             line_y = (p1[1] + p2[1]) // 2
             if min_x <= curr_pt[0] <= max_x:
                 if prev_pt[1] <= line_y and curr_pt[1] > line_y:
                     return "IN"
                 if prev_pt[1] >= line_y and curr_pt[1] < line_y:
                     return "OUT"
-            min_y = min(p1[1], p2[1]) - 25
-            max_y = max(p1[1], p2[1]) + 25
+            min_y = min(p1[1], p2[1]) - 20
+            max_y = max(p1[1], p2[1]) + 20
             line_x = (p1[0] + p2[0]) // 2
             if min_y <= curr_pt[1] <= max_y:
                 if prev_pt[0] <= line_x and curr_pt[0] > line_x:
@@ -108,4 +106,3 @@ class TrafficCountingEngine:
             return None
 
 counting_engine = TrafficCountingEngine()
-

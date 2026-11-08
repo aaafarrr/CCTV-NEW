@@ -9,6 +9,7 @@ from collections import deque
 import numpy as np
 import cv2
 from typing import Dict, Any, Optional, List, Tuple
+from app.core.config import settings
 from app.services.ai.detector import detector_tracker
 from app.services.ai.counting import counting_engine
 from app.services.ai.anomaly import anomaly_engine
@@ -19,23 +20,20 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|timeout;500000
 
 logger = logging.getLogger("cctv_new.camera_stream")
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-STORAGE_DIR = os.path.join(BASE_DIR, "storage")
-CAMERAS_JSON_PATH = os.path.join(STORAGE_DIR, "cameras.json")
-
-SYNTHETIC_MODES = {"synthetic_lobby", "synthetic_parking", "synthetic_gate", "synthetic_warehouse", ""}
+CAMERAS_JSON_PATH = os.path.join(settings.STORAGE_DIR, "cameras.json")
 
 class CameraStreamManager:
     """
-    Manages active camera streams (RTSP, ONVIF, V380, Synthetic AI Simulator).
-    Includes ZoneMinder-style Pre-Alarm Circular Frame Buffer & Real-time PTZ / Digital Zoom processor.
+    Production-ready Stream Manager supporting RTSP, ONVIF, and HTTP IP Cameras.
+    Provides background capture, ring-buffer for pre-alarm replay, and AI pipeline.
+    Starts with 0 cameras until configured by the administrator.
     """
     def __init__(self):
         self.active_streams: Dict[str, Dict[str, Any]] = {}
         self.ptz_states: Dict[str, Dict[str, float]] = {}
         self.pre_event_buffers: Dict[str, deque] = {}
         self.timeline_bands: Dict[str, List[Dict[str, Any]]] = {}
-        self.recent_runtime_alerts: deque = deque(maxlen=40)
+        self.recent_runtime_alerts: deque = deque(maxlen=50)
         self.last_cloud_sync_ts: Dict[str, float] = {}
         self.is_running = True
         self._load_persistent_cameras()
@@ -52,121 +50,24 @@ class CameraStreamManager:
                     pass
                 stream_data["cap"] = None
 
-    def _default_cameras(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "id": "cam_1",
-                "name": "Kamera Utama (Lobby)",
-                "location": "Lantai 1 - Pintu Masuk Utama",
-                "stream_url": "synthetic_lobby",
-                "enable_counting": True,
-                "enable_suspicious": True,
-                "enable_face_rec": True,
-                "roi_zones": [
-                    {
-                        "id": "z_vault_1",
-                        "name": "Area Resepsionis & Kasir",
-                        "type": "INTRUSION",
-                        "polygon": [{"x": 420, "y": 190}, {"x": 610, "y": 190}, {"x": 610, "y": 350}, {"x": 420, "y": 350}],
-                        "max_dwell_sec": 5
-                    }
-                ],
-                "counting_lines": [
-                    {
-                        "id": "l_lobby_1",
-                        "name": "Garis Pintu Lobby",
-                        "start": {"x": 40, "y": 270},
-                        "end": {"x": 400, "y": 270}
-                    }
-                ]
-            },
-            {
-                "id": "cam_2",
-                "name": "Kamera Area Parkir",
-                "location": "Gedung B - Parkir Kendaraan",
-                "stream_url": "synthetic_parking",
-                "enable_counting": True,
-                "enable_suspicious": True,
-                "enable_face_rec": False,
-                "roi_zones": [
-                    {
-                        "id": "z_park_1",
-                        "name": "Jalur Evakuasi Darurat",
-                        "type": "LOITERING",
-                        "polygon": [{"x": 60, "y": 200}, {"x": 250, "y": 200}, {"x": 250, "y": 330}, {"x": 60, "y": 330}],
-                        "max_dwell_sec": 6
-                    }
-                ],
-                "counting_lines": [
-                    {
-                        "id": "l_park_1",
-                        "name": "Portal Masuk Parkir",
-                        "start": {"x": 50, "y": 360},
-                        "end": {"x": 590, "y": 360}
-                    }
-                ]
-            },
-            {
-                "id": "cam_3",
-                "name": "Kamera Gerbang Kargo (V380)",
-                "location": "Sektor Timur - Loading Dock",
-                "stream_url": "synthetic_gate",
-                "enable_counting": True,
-                "enable_suspicious": True,
-                "enable_face_rec": True,
-                "roi_zones": [],
-                "counting_lines": [
-                    {
-                        "id": "l_gate_1",
-                        "name": "Gerbang Logistik",
-                        "start": {"x": 60, "y": 300},
-                        "end": {"x": 580, "y": 300}
-                    }
-                ]
-            },
-            {
-                "id": "cam_4",
-                "name": "Kamera Gudang & Brankas",
-                "location": "Lantai B1 - Ruang Vault",
-                "stream_url": "synthetic_warehouse",
-                "enable_counting": True,
-                "enable_suspicious": True,
-                "enable_face_rec": True,
-                "roi_zones": [
-                    {
-                        "id": "z_vault_secure",
-                        "name": "Zona Brankas Utama",
-                        "type": "INTRUSION",
-                        "polygon": [{"x": 180, "y": 160}, {"x": 460, "y": 160}, {"x": 460, "y": 360}, {"x": 180, "y": 360}],
-                        "max_dwell_sec": 3
-                    }
-                ],
-                "counting_lines": []
-            }
-        ]
-
     def _load_persistent_cameras(self):
-        os.makedirs(STORAGE_DIR, exist_ok=True)
+        os.makedirs(settings.STORAGE_DIR, exist_ok=True)
         if not os.path.exists(CAMERAS_JSON_PATH):
-            for cam_info in self._default_cameras():
-                self.add_or_update_camera(cam_info, save_to_disk=False)
-            self._save_persistent_cameras()
+            # Production: Empty camera list by default
+            with open(CAMERAS_JSON_PATH, "w", encoding="utf-8") as f:
+                json.dump([], f, indent=2)
             return
 
         try:
             with open(CAMERAS_JSON_PATH, "r", encoding="utf-8") as f:
                 cams_data = json.load(f)
-                if not cams_data:
-                    cams_data = self._default_cameras()
                 for cam_info in cams_data:
                     self.add_or_update_camera(cam_info, save_to_disk=False)
         except Exception as e:
             logger.error(f"Error loading cameras.json: {e}")
-            for cam_info in self._default_cameras():
-                self.add_or_update_camera(cam_info, save_to_disk=False)
 
     def _save_persistent_cameras(self):
-        os.makedirs(STORAGE_DIR, exist_ok=True)
+        os.makedirs(settings.STORAGE_DIR, exist_ok=True)
         cams_data = [data["info"] for data in self.active_streams.values()]
         try:
             with open(CAMERAS_JSON_PATH, "w", encoding="utf-8") as f:
@@ -174,18 +75,8 @@ class CameraStreamManager:
         except Exception as e:
             logger.error(f"Error saving cameras.json: {e}")
 
-    def _init_timeline_bands(self, camera_id: str):
-        now = time.time()
-        self.timeline_bands[camera_id] = [
-            {"id": f"{camera_id}_ev1", "hour_offset": -6.5, "duration_min": 14, "type": "PERSON", "color": "#06b6d4", "label": "Aktivitas Pedestrian Pagi", "timestamp": now - 6.5 * 3600},
-            {"id": f"{camera_id}_ev2", "hour_offset": -4.2, "duration_min": 18, "type": "VEHICLE", "color": "#8b5cf6", "label": "Konvoi Kendaraan Masuk", "timestamp": now - 4.2 * 3600},
-            {"id": f"{camera_id}_ev3", "hour_offset": -2.1, "duration_min": 8, "type": "LOITERING", "color": "#f59e0b", "label": "Peringatan Loitering Area Terbatas", "timestamp": now - 2.1 * 3600},
-            {"id": f"{camera_id}_ev4", "hour_offset": -0.6, "duration_min": 6, "type": "INTRUSION", "color": "#ef4444", "label": "Pelanggaran Perimeter / Watchlist", "timestamp": now - 0.6 * 3600},
-        ]
-
     def add_or_update_camera(self, cam_info: Dict[str, Any], save_to_disk: bool = True):
         cam_id = cam_info["id"]
-        stream_url = cam_info.get("stream_url", "")
 
         if cam_id in self.active_streams:
             self.active_streams[cam_id]["stopped"] = True
@@ -196,14 +87,13 @@ class CameraStreamManager:
                     pass
 
         self.ptz_states.setdefault(cam_id, {"pan": 0.0, "tilt": 0.0, "zoom": 1.0})
-        self.pre_event_buffers.setdefault(cam_id, deque(maxlen=75))  # ~5s circular buffer
-        if cam_id not in self.timeline_bands:
-            self._init_timeline_bands(cam_id)
+        self.pre_event_buffers.setdefault(cam_id, deque(maxlen=75))  # ~5 seconds pre-event buffer
+        self.timeline_bands.setdefault(cam_id, [])
 
         self.active_streams[cam_id] = {
             "info": cam_info,
             "cap": None,
-            "is_connecting": True if stream_url and stream_url not in SYNTHETIC_MODES else False,
+            "is_connecting": True,
             "last_connect_attempt": 0.0,
             "consecutive_failures": 0,
             "latest_frame": None,
@@ -270,6 +160,7 @@ class CameraStreamManager:
         return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
 
     def _camera_worker_loop(self, camera_id: str):
+        infer_counter = 0
         while self.is_running:
             if camera_id not in self.active_streams:
                 break
@@ -282,7 +173,7 @@ class CameraStreamManager:
             now = time.time()
 
             cap = stream_data.get("cap")
-            if cap is None and stream_url and stream_url not in SYNTHETIC_MODES:
+            if cap is None and stream_url:
                 last_attempt = stream_data.get("last_connect_attempt", 0.0)
                 if now - last_attempt >= 5.0:
                     stream_data["last_connect_attempt"] = now
@@ -296,7 +187,8 @@ class CameraStreamManager:
                             if cap:
                                 cap.release()
                             cap = None
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Connection failure to {stream_url}: {e}")
                         cap = None
 
             frame = None
@@ -308,7 +200,7 @@ class CameraStreamManager:
                 else:
                     failures = stream_data.get("consecutive_failures", 0) + 1
                     stream_data["consecutive_failures"] = failures
-                    if failures >= 30:
+                    if failures >= 25:
                         try:
                             cap.release()
                         except Exception:
@@ -318,16 +210,32 @@ class CameraStreamManager:
                         stream_data["consecutive_failures"] = 0
 
             if frame is None:
-                if stream_url in SYNTHETIC_MODES:
-                    frame = self._generate_synthetic_frame(camera_id, stream_url)
-                else:
-                    frame = self._generate_standby_frame(camera_id)
+                frame = self._generate_offline_frame(camera_id, cam_info.get("name", camera_id))
+                ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                if ret:
+                    b_bytes = buf.tobytes()
+                    stream_data["latest_jpeg_boxes"] = b_bytes
+                    stream_data["latest_jpeg_clean"] = b_bytes
+                    stream_data["latest_frame"] = frame
+                time.sleep(0.5)
+                continue
+
+            # Limit resolution for CPU efficiency if needed
+            h, w = frame.shape[:2]
+            if w > settings.MAX_FRAME_WIDTH:
+                new_h = int(h * (settings.MAX_FRAME_WIDTH / w))
+                frame = cv2.resize(frame, (settings.MAX_FRAME_WIDTH, new_h), interpolation=cv2.INTER_AREA)
 
             frame = self._apply_ptz_transform(camera_id, frame)
             self.pre_event_buffers[camera_id].append(frame)
 
+            infer_counter += 1
+            run_ai = (infer_counter % settings.DETECT_EVERY_N_FRAMES == 0)
+
             try:
-                annotated_boxes, annotated_clean, metadata = self.process_frame_dual(camera_id, frame)
+                annotated_boxes, annotated_clean, metadata = self.process_frame_dual(
+                    camera_id, frame, run_ai=run_ai
+                )
                 ret_b, buf_boxes = cv2.imencode(".jpg", annotated_boxes, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
                 if ret_b:
                     stream_data["latest_jpeg_boxes"] = buf_boxes.tobytes()
@@ -339,9 +247,9 @@ class CameraStreamManager:
                 stream_data["latest_frame"] = annotated_boxes
                 stream_data["latest_metadata"] = metadata
             except Exception as e:
-                logger.error(f"Error in background worker for {camera_id}: {e}")
+                logger.error(f"Error in stream processing for {camera_id}: {e}")
 
-            time.sleep(0.06)
+            time.sleep(0.04)
 
     def get_latest_frame_jpeg(self, camera_id: str, show_boxes: bool = True) -> Optional[bytes]:
         if camera_id not in self.active_streams:
@@ -352,20 +260,26 @@ class CameraStreamManager:
         ) or stream_data.get("latest_jpeg_boxes")
 
         if jpeg is None:
-            standby_frame = self._generate_standby_frame(camera_id)
-            ret, buf = cv2.imencode(".jpg", standby_frame)
+            name = stream_data.get("info", {}).get("name", camera_id)
+            off_frame = self._generate_offline_frame(camera_id, name)
+            ret, buf = cv2.imencode(".jpg", off_frame)
             return buf.tobytes() if ret else None
         return jpeg
 
-    def process_frame_dual(self, camera_id: str, frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    def process_frame_dual(
+        self,
+        camera_id: str,
+        frame: np.ndarray,
+        run_ai: bool = True
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
         cam_info = self.active_streams[camera_id]["info"]
         clean_frame = frame.copy()
         box_frame = frame.copy()
 
-        # 1. Motion Pre-Filter & Object Detection
-        box_frame, detections = detector_tracker.process_frame(box_frame, camera_id, draw_boxes=True)
+        detections = []
+        if run_ai:
+            box_frame, detections = detector_tracker.process_frame(box_frame, camera_id, draw_boxes=True)
 
-        # 2. Traffic Counting
         counts = {"people_in": 0, "people_out": 0, "vehicles_in": 0, "vehicles_out": 0}
         if cam_info.get("enable_counting"):
             counts = counting_engine.process_counting(
@@ -374,9 +288,8 @@ class CameraStreamManager:
                 cam_info.get("counting_lines", [])
             )
 
-        # 3. Behavior & Anomaly Detection
         alerts = []
-        if cam_info.get("enable_suspicious"):
+        if cam_info.get("enable_suspicious") and detections:
             alerts = anomaly_engine.analyze_behavior(
                 camera_id,
                 cam_info.get("name", camera_id),
@@ -384,7 +297,7 @@ class CameraStreamManager:
                 cam_info.get("roi_zones", [])
             )
             for al in alerts:
-                alert_id = f"rt_{int(time.time()*1000)}_{camera_id}"
+                alert_id = f"evt_{int(time.time()*1000)}_{camera_id}"
                 snap_url = self._persist_alert_sqlite(alert_id, al, frame=box_frame)
                 self.recent_runtime_alerts.appendleft({
                     "id": alert_id,
@@ -393,9 +306,8 @@ class CameraStreamManager:
                     **al
                 })
 
-        # 4. Face Recognition
         faces = []
-        if cam_info.get("enable_face_rec"):
+        if cam_info.get("enable_face_rec") and run_ai:
             faces = face_engine.extract_faces_from_frame(
                 box_frame,
                 camera_id,
@@ -403,10 +315,7 @@ class CameraStreamManager:
                 draw_boxes=True
             )
 
-        # Draw ROI Zones & Counting Lines on box_frame
         self._draw_zones_and_lines(box_frame, cam_info)
-
-        # Draw OSD HUD on both frames
         self._draw_cctv_hud(box_frame, camera_id, cam_info.get("name", camera_id), counts, alerts)
         self._draw_cctv_hud(clean_frame, camera_id, cam_info.get("name", camera_id), counts, [])
 
@@ -429,7 +338,6 @@ class CameraStreamManager:
             if len(poly) >= 3:
                 pts = np.array([[int(p.get("x", 0)), int(p.get("y", 0))] for p in poly], np.int32)
                 is_intrusion = zone.get("type", "INTRUSION") == "INTRUSION"
-                # Red #ef4444 (BGR 68,68,239) for Intrusion, Amber #f59e0b (BGR 11,158,245) for Loitering
                 color = (68, 68, 239) if is_intrusion else (11, 158, 245)
                 overlay = frame.copy()
                 cv2.fillPoly(overlay, [pts], color)
@@ -443,104 +351,48 @@ class CameraStreamManager:
             e = line.get("end", {"x": 580, "y": 270})
             p1 = (int(s.get("x", 40)), int(s.get("y", 270)))
             p2 = (int(e.get("x", 580)), int(e.get("y", 270)))
-            # Cyan #06b6d4 (BGR 212, 182, 6)
             cv2.line(frame, p1, p2, (212, 182, 6), 2)
             cv2.putText(frame, f"LINE: {line.get('name', 'Counter')}", (p1[0] + 6, max(20, p1[1] - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (212, 182, 6), 1)
 
     def _draw_cctv_hud(self, frame: np.ndarray, camera_id: str, cam_name: str, counts: Dict[str, int], alerts: List[Dict[str, Any]]):
         h, w = frame.shape[:2]
         overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w, 38), (15, 23, 42), -1)
+        cv2.rectangle(overlay, (0, 0), (w, 36), (15, 23, 42), -1)
         cv2.addWeighted(overlay, 0.80, frame, 0.20, 0, frame)
 
         # Online dot + Camera Name
-        cv2.circle(frame, (16, 19), 5, (129, 185, 16), -1)
-        cv2.putText(frame, f"REC | {cam_name}", (28, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1)
+        cv2.circle(frame, (16, 18), 5, (129, 185, 16), -1)
+        cv2.putText(frame, f"LIVE | {cam_name}", (28, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1)
 
         ptz = self.ptz_states.get(camera_id, {"zoom": 1.0})
         zoom_str = f"PTZ {ptz.get('zoom', 1.0):.1f}x"
-        hud_text = f"IN:{counts.get('people_in', 0)}P / {counts.get('vehicles_in', 0)}V | {zoom_str} | {time.strftime('%H:%M:%S')}"
-        cv2.putText(frame, hud_text, (w - 310, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (226, 232, 240), 1)
+        hud_text = f"P:{counts.get('people_in', 0)} | V:{counts.get('vehicles_in', 0)} | {zoom_str} | {time.strftime('%H:%M:%S')}"
+        cv2.putText(frame, hud_text, (max(200, w - 300), 23), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (226, 232, 240), 1)
 
         if alerts:
             alert = alerts[0]
-            cv2.rectangle(frame, (0, h - 34), (w, h), (45, 45, 220), -1)
-            cv2.putText(frame, f"ALERT: {alert['description'][:68]}", (12, h - 11), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 255, 255), 1)
+            cv2.rectangle(frame, (0, h - 32), (w, h), (45, 45, 220), -1)
+            cv2.putText(frame, f"ALERT: {alert['description'][:68]}", (12, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 255, 255), 1)
 
-    def _generate_standby_frame(self, camera_id: str) -> np.ndarray:
-        h, w = 420, 640
+    def _generate_offline_frame(self, camera_id: str, cam_name: str) -> np.ndarray:
+        h, w = 360, 640
         frame = np.zeros((h, w, 3), dtype=np.uint8)
-        frame[:] = [18, 24, 36]
-        for x in range(0, w, 80):
-            cv2.line(frame, (x, 0), (x, h), (30, 41, 59), 1)
-        for y in range(0, h, 60):
-            cv2.line(frame, (0, y), (w, y), (30, 41, 59), 1)
-        cv2.putText(frame, f"CAMERA [{camera_id.upper()}] STANDBY - CONNECTING...", (105, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 160, 40), 2)
-        return frame
-
-    def _generate_synthetic_frame(self, camera_id: str, mode: str) -> np.ndarray:
-        h, w = 420, 640
-        frame = np.zeros((h, w, 3), dtype=np.uint8)
-        t = time.time() * 1.8
-
-        if mode == "synthetic_parking":
-            frame[:] = [32, 38, 46]
-            cv2.rectangle(frame, (0, 170), (w, h), (44, 52, 64), -1)
-            for x in range(80, w, 120):
-                cv2.line(frame, (x, 170), (x - 30, h), (180, 190, 200), 1)
-            # Moving Car 1
-            v1_x = int(w - ((t * 75) % (w + 140)))
-            cv2.rectangle(frame, (v1_x, 325), (v1_x + 92, 370), (235, 110, 50), -1)
-            # Moving Person
-            p1_x = int((t * 42) % (w + 80)) - 40
-            cv2.circle(frame, (p1_x, 235), 11, (129, 185, 16), -1)
-            cv2.rectangle(frame, (p1_x - 10, 246), (p1_x + 10, 282), (129, 185, 16), -1)
-
-        elif mode == "synthetic_gate":
-            frame[:] = [28, 36, 42]
-            cv2.rectangle(frame, (0, 200), (w, h), (48, 56, 62), -1)
-            cv2.line(frame, (0, 300), (w, 300), (80, 180, 250), 1)
-            # Cargo Truck moving vertically/diagonally
-            trk_x = int((t * 60) % (w + 180)) - 90
-            cv2.rectangle(frame, (trk_x, 260), (trk_x + 115, 318), (80, 140, 240), -1)
-            # Worker walking
-            p2_x = int(w - ((t * 38) % (w + 60)))
-            cv2.circle(frame, (p2_x, 220), 11, (50, 210, 120), -1)
-            cv2.rectangle(frame, (p2_x - 9, 231), (p2_x + 9, 268), (50, 210, 120), -1)
-
-        elif mode == "synthetic_warehouse":
-            frame[:] = [24, 30, 38]
-            cv2.rectangle(frame, (40, 80), (140, 360), (50, 60, 75), -1)
-            cv2.rectangle(frame, (500, 80), (600, 360), (50, 60, 75), -1)
-            # Patrol / Intruder moving across vault zone
-            px = int(160 + 150 * (0.5 + 0.5 * np.sin(t * 0.7)))
-            py = int(230 + 45 * np.cos(t * 0.9))
-            cv2.circle(frame, (px, py), 12, (90, 200, 255), -1)
-            cv2.rectangle(frame, (px - 11, py + 12), (px + 11, py + 48), (90, 200, 255), -1)
-
-        else:  # synthetic_lobby
-            frame[:] = [34, 42, 54]
-            cv2.rectangle(frame, (0, 210), (w, h), (52, 62, 76), -1)
-            # Reception desk on right
-            cv2.rectangle(frame, (430, 200), (595, 340), (70, 82, 98), 2)
-            # Person 1 crossing lobby line
-            p1_x = int(90 + 180 * (0.5 + 0.5 * np.sin(t * 0.65)))
-            p1_y = int(265 + 65 * np.sin(t * 0.85))
-            cv2.circle(frame, (p1_x, p1_y), 12, (129, 185, 16), -1)
-            cv2.rectangle(frame, (p1_x - 11, p1_y + 12), (p1_x + 11, p1_y + 46), (129, 185, 16), -1)
-            # Person 2 approaching reception
-            p2_x = int(360 + 120 * (0.5 + 0.5 * np.cos(t * 0.5)))
-            p2_y = int(245 + 30 * np.sin(t * 0.6))
-            cv2.circle(frame, (p2_x, p2_y), 12, (240, 175, 60), -1)
-            cv2.rectangle(frame, (p2_x - 11, p2_y + 12), (p2_x + 11, p2_y + 46), (240, 175, 60), -1)
-
+        frame[:] = [20, 24, 32]
+        # Grid pattern
+        for x in range(0, w, 64):
+            cv2.line(frame, (x, 0), (x, h), (30, 38, 48), 1)
+        for y in range(0, h, 64):
+            cv2.line(frame, (0, y), (w, y), (30, 38, 48), 1)
+        cv2.circle(frame, (w // 2, h // 2 - 20), 24, (50, 60, 80), -1)
+        cv2.putText(frame, "!", (w // 2 - 6, h // 2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (180, 190, 200), 2)
+        cv2.putText(frame, f"{cam_name.upper()} (OFFLINE)", (w // 2 - 120, h // 2 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
+        cv2.putText(frame, "Menghubungkan ke URL RTSP...", (w // 2 - 95, h // 2 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (140, 150, 160), 1)
         return frame
 
     def get_pre_event_replay_frames(self, camera_id: str, label: str = "INSIDEN") -> List[bytes]:
-        """Return encoded JPEG frames from the 75-frame (~5s) circular pre-event buffer for scrubber replay."""
         buf = list(self.pre_event_buffers.get(camera_id, []))
         if not buf:
-            buf = [self._generate_synthetic_frame(camera_id, "synthetic_lobby") for _ in range(25)]
+            return []
         total = len(buf)
         encoded_frames: List[bytes] = []
         for idx, raw_frame in enumerate(buf):
@@ -551,10 +403,10 @@ class CameraStreamManager:
             cv2.circle(f, (18, 18), 6, (68, 68, 239), -1)
             cv2.putText(
                 f,
-                f"REPLAY PRE-ALARM BUFFER ({sec_offset:+.1f}s) | {label[:38]}",
+                f"REPLAY PRE-ALARM ({sec_offset:+.1f}s) | {label[:38]}",
                 (32, 23),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.48,
+                0.46,
                 (255, 255, 255),
                 1
             )
@@ -564,57 +416,53 @@ class CameraStreamManager:
         return encoded_frames
 
     def _persist_alert_sqlite(self, alert_id: str, al: Dict[str, Any], frame: Optional[np.ndarray] = None) -> str:
-        """Persist real-time alert + snapshot to disk, SQLite, Timeline Scrubber, and Clospol Cloud Pool"""
         cam_id = al.get("camera_id", "cam_1")
         cam_name = al.get("camera_name", "Kamera Utama")
         evt_type = al.get("event_type", "INTRUSION")
         sev = al.get("severity", "CRITICAL")
 
-        snap_dir = os.path.join(STORAGE_DIR, "snapshots")
-        os.makedirs(snap_dir, exist_ok=True)
         snap_filename = f"{alert_id}.jpg"
-        snap_path = os.path.join(snap_dir, snap_filename)
-        snap_url = f"/api/v1/cameras/{cam_id}/thumbnail?show_boxes=true"
+        snap_path = os.path.join(settings.SNAPSHOT_DIR, snap_filename)
+        snap_url = f"/media/snapshots/{snap_filename}"
 
         target_frame = frame if frame is not None else self.active_streams.get(cam_id, {}).get("latest_frame")
         if target_frame is not None:
             try:
-                if cv2.imwrite(snap_path, target_frame):
-                    snap_url = f"/api/v1/cameras/snapshots/download/{snap_filename}"
-            except Exception:
-                pass
+                cv2.imwrite(snap_path, target_frame)
+            except Exception as e:
+                logger.error(f"Failed to write snapshot {snap_path}: {e}")
 
-        # Append to 24h Timeline Scrubber bands
+        # Update Timeline Scrubber
         bands = self.timeline_bands.setdefault(cam_id, [])
         color = "#ef4444" if sev == "CRITICAL" else "#f59e0b"
         bands.append({
             "id": alert_id,
-            "hour_offset": -0.08,
-            "duration_min": 6,
+            "hour_offset": -0.05,
+            "duration_min": 5,
             "type": "INTRUSION" if evt_type != "LOITERING" else "LOITERING",
             "color": color,
             "label": al.get("description", evt_type)[:48],
             "timestamp": time.time()
         })
 
-        # Auto-Sync to Cloud Storage Pool (Clospol) on policy match with 15s cooldown per camera
+        # S3 Cloud Upload if enabled
         now = time.time()
-        policy = storage_gateway.policy
         if (
-            policy.get("auto_tiering_enabled", True)
-            and sev in policy.get("sync_on_severity", ["CRITICAL", "WARNING"])
+            storage_gateway.policy.get("auto_sync_critical_events", True)
+            and sev == "CRITICAL"
             and now - self.last_cloud_sync_ts.get(cam_id, 0.0) >= 15.0
+            and os.path.exists(snap_path)
         ):
             self.last_cloud_sync_ts[cam_id] = now
-            storage_gateway.trigger_cloud_sync(
-                camera_name=cam_name,
-                reason=f"Auto-Sync [{sev}] {evt_type} ({snap_filename})"
+            storage_gateway.upload_file_to_s3(
+                local_path=snap_path,
+                remote_filename=f"events/{cam_id}/{snap_filename}",
+                metadata={"event_type": evt_type, "camera_id": cam_id}
             )
 
-        db_path = os.path.join(BASE_DIR, "cctv_enterprise.db")
-        if os.path.exists(db_path):
+        if os.path.exists(settings.DATABASE_PATH):
             try:
-                with sqlite3.connect(db_path, timeout=2.0) as conn:
+                with sqlite3.connect(settings.DATABASE_PATH, timeout=2.0) as conn:
                     conn.execute(
                         """
                         INSERT OR IGNORE INTO security_events
@@ -630,7 +478,7 @@ class CameraStreamManager:
                             al.get("description", ""),
                             al.get("ai_summary", ""),
                             snap_url,
-                            1,
+                            1 if storage_gateway.s3_client else 0,
                             json.dumps(al.get("metadata", {})),
                             datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f"),
                         )
@@ -666,4 +514,3 @@ class CameraStreamManager:
             self._save_persistent_cameras()
 
 stream_manager = CameraStreamManager()
-

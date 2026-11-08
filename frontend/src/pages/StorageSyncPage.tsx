@@ -14,18 +14,18 @@ import {
   Form,
   Input,
   InputNumber,
-  Select,
   Switch,
+  Alert,
   message,
 } from 'antd';
 import {
   CloudServerOutlined,
-  CloudSyncOutlined,
-  PlusOutlined,
-  DeleteOutlined,
-  PoweroffOutlined,
+  CloudUploadOutlined,
+  SettingOutlined,
   HddOutlined,
   SafetyOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
 } from '@ant-design/icons';
 import { ENTERPRISE_TOKENS } from '../theme/enterpriseTheme';
 import { apiFetch } from '../utils/api';
@@ -35,21 +35,34 @@ const { Title, Text } = Typography;
 export const StorageSyncPage: React.FC = () => {
   const [overview, setOverview] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
-  // Add Provider State
-  const [provName, setProvName] = useState('');
-  const [provType, setProvType] = useState('GOOGLE_DRIVE');
-  const [provEndpoint, setProvEndpoint] = useState('gdrive://cctv-backup-bucket');
-  const [provTier, setProvTier] = useState('WARM (Tier 2)');
-  const [provQuota, setProvQuota] = useState<number>(1000);
+  // Policy Form State
+  const [s3Bucket, setS3Bucket] = useState('');
+  const [s3Endpoint, setS3Endpoint] = useState('');
+  const [s3Region, setS3Region] = useState('auto');
+  const [s3Prefix, setS3Prefix] = useState('cctv');
+  const [localDays, setLocalDays] = useState(7);
+  const [cloudDays, setCloudDays] = useState(90);
+  const [autoSync, setAutoSync] = useState(true);
 
   const fetchOverview = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/v1/storage/overview');
-      if (res.ok) setOverview(await res.json());
+      const res = await apiFetch('/api/v1/storage/overview');
+      if (res.ok) {
+        const data = await res.json();
+        setOverview(data);
+        if (data.policy) {
+          setS3Bucket(data.policy.s3_bucket || '');
+          setS3Endpoint(data.policy.s3_endpoint_url || '');
+          setS3Region(data.policy.s3_region || 'auto');
+          setS3Prefix(data.policy.s3_prefix || 'cctv');
+          setLocalDays(data.policy.local_retention_days || 7);
+          setCloudDays(data.policy.cloud_retention_days || 90);
+          setAutoSync(data.policy.auto_sync_critical_events ?? true);
+        }
+      }
     } catch {
       // ignore
     } finally {
@@ -61,146 +74,29 @@ export const StorageSyncPage: React.FC = () => {
     fetchOverview();
   }, []);
 
-  const handleTriggerSync = async () => {
-    setSyncing(true);
+  const handleSavePolicy = async () => {
     try {
-      const res = await apiFetch('/api/v1/storage/sync', {
-        method: 'POST',
+      const res = await apiFetch('/api/v1/storage/policy', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          camera_name: 'Semua Kamera Aktif (Pool)',
-          reason: 'Sinkronisasi Manual Operator',
+          s3_bucket: s3Bucket.trim(),
+          s3_endpoint_url: s3Endpoint.trim(),
+          s3_region: s3Region.trim(),
+          s3_prefix: s3Prefix.trim(),
+          local_retention_days: localDays,
+          cloud_retention_days: cloudDays,
+          auto_sync_critical_events: autoSync,
         }),
       });
-      if (res.ok) {
-        const job = await res.json();
-        message.success(`Arsip ${job.filename} berhasil disinkronkan ke ${job.target_provider}`);
-        fetchOverview();
-      }
-    } catch {
-      message.error('Gagal menjalankan sinkronisasi cloud');
-    } finally {
-      setSyncing(false);
+      if (!res.ok) throw new Error('Gagal menyimpan konfigurasi');
+      message.success('Konfigurasi S3 Cloud Storage berhasil diperbarui');
+      setModalOpen(false);
+      fetchOverview();
+    } catch (e: any) {
+      message.error(e.message || 'Gagal menyimpan');
     }
   };
-
-  const handleAddProvider = async () => {
-    if (!provName.trim() || !provEndpoint.trim()) {
-      message.warning('Lengkapi nama dan endpoint provider terlebih dahulu');
-      return;
-    }
-    try {
-      const res = await apiFetch('/api/v1/storage/providers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: provName.trim(),
-          type: provType,
-          endpoint: provEndpoint.trim(),
-          tier: provTier,
-          quota_gb: provQuota,
-        }),
-      });
-      if (res.ok) {
-        message.success(`Provider ${provName} ditambahkan ke Storage Pool`);
-        setAddModalOpen(false);
-        setProvName('');
-        fetchOverview();
-      }
-    } catch {
-      message.error('Gagal menambahkan provider');
-    }
-  };
-
-  const handleToggleProvider = async (id: string) => {
-    await apiFetch(`/api/v1/storage/providers/${id}/toggle`, { method: 'PUT' });
-    fetchOverview();
-  };
-
-  const handleDeleteProvider = async (id: string) => {
-    const res = await apiFetch(`/api/v1/storage/providers/${id}`, { method: 'DELETE' });
-    if (!res.ok) {
-      const err = await res.json();
-      message.error(err.detail || 'Gagal menghapus provider');
-      return;
-    }
-    message.success('Provider dihapus dari pool');
-    fetchOverview();
-  };
-
-  const handleToggleAutoTiering = async (enabled: boolean) => {
-    if (!overview?.policy) return;
-    await apiFetch('/api/v1/storage/policy', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...overview.policy,
-        auto_tiering_enabled: enabled,
-      }),
-    });
-    message.success(`Auto-Tiering ${enabled ? 'Diaktifkan' : 'Dinonaktifkan'}`);
-    fetchOverview();
-  };
-
-  const providerColumns = [
-    {
-      title: 'Nama Storage Provider',
-      dataIndex: 'name',
-      key: 'name',
-      render: (name: string, r: any) => (
-        <div>
-          <Text strong>{name}</Text>
-          <div className="mono-text" style={{ fontSize: 11, color: ENTERPRISE_TOKENS.textSecondary }}>{r.endpoint}</div>
-        </div>
-      ),
-    },
-    {
-      title: 'Tipe & Tier',
-      key: 'tier',
-      render: (_: any, r: any) => (
-        <Space>
-          <Tag color="blue">{r.type}</Tag>
-          <Tag color="purple">{r.tier}</Tag>
-        </Space>
-      ),
-    },
-    {
-      title: 'Kapasitas Terpakai',
-      key: 'usage',
-      width: 240,
-      render: (_: any, r: any) => {
-        const pct = Math.round(((r.used_gb || 0) / Math.max(1, r.quota_gb || 1)) * 100);
-        return (
-          <div>
-            <div style={{ fontSize: 12 }}>{r.used_gb} GB / {r.quota_gb} GB ({pct}%)</div>
-            <Progress percent={pct} size="small" strokeColor={ENTERPRISE_TOKENS.primaryColor} showInfo={false} />
-          </div>
-        );
-      },
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (st: string) => (
-        <Tag color={st === 'CONNECTED' ? 'success' : 'default'}>{st}</Tag>
-      ),
-    },
-    {
-      title: 'Aksi',
-      key: 'action',
-      render: (_: any, r: any) => (
-        <Space>
-          <Button size="small" icon={<PoweroffOutlined />} onClick={() => handleToggleProvider(r.id)}>
-            Toggle
-          </Button>
-          {r.id !== 'prov_local_nvme' && (
-            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteProvider(r.id)} />
-          )}
-        </Space>
-      ),
-    },
-  ];
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -209,21 +105,16 @@ export const StorageSyncPage: React.FC = () => {
           <div>
             <Title level={4} style={{ margin: 0 }}>
               <CloudServerOutlined style={{ color: ENTERPRISE_TOKENS.primaryColor, marginRight: 8 }} />
-              Multi-Cloud Storage Pool & Auto-Tiering Gateway (Clospol Engine)
+              S3 Object Storage & Cloud Archival (Boto3 Engine)
             </Title>
             <Text type="secondary" style={{ fontSize: 13 }}>
-              Penggabungan disk lokal NVMe dengan Google Drive, OneDrive, dan S3/Cloudflare R2 untuk retensi rekaman hemat biaya
+              Integrasi langsung AWS S3, Cloudflare R2, MinIO, atau Wasabi untuk pengarsipan snapshot dan bukti rekaman insiden.
             </Text>
           </div>
 
-          <Space>
-            <Button icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)}>
-              Tambah Cloud Provider
-            </Button>
-            <Button type="primary" icon={<CloudSyncOutlined spin={syncing} />} loading={syncing} onClick={handleTriggerSync}>
-              Sinkronkan Klip ke Cloud Sekarang
-            </Button>
-          </Space>
+          <Button type="primary" icon={<SettingOutlined />} onClick={() => setModalOpen(true)}>
+            Atur Konfigurasi S3 & Retensi
+          </Button>
         </div>
       </Card>
 
@@ -231,119 +122,104 @@ export const StorageSyncPage: React.FC = () => {
         <Col xs={24} sm={8}>
           <Card size="small">
             <Statistic
-              title="Total Kapasitas Pool Gabungan"
-              value={overview?.total_quota_gb ?? 8500}
-              suffix="GB"
-              prefix={<HddOutlined style={{ color: ENTERPRISE_TOKENS.primaryColor }} />}
+              title="Status Koneksi S3"
+              value={overview?.s3_configured ? 'Terhubung' : 'Belum Terhubung'}
+              valueStyle={{ color: overview?.s3_configured ? '#10b981' : '#f59e0b' }}
+              prefix={overview?.s3_configured ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
             />
             <div style={{ marginTop: 6, fontSize: 12, color: ENTERPRISE_TOKENS.textSecondary }}>
-              Tersedia Bebas: <strong>{overview?.free_gb ?? 6873.3} GB</strong>
+              Bucket: <strong>{overview?.s3_bucket || '-'}</strong>
             </div>
           </Card>
         </Col>
+
         <Col xs={24} sm={8}>
           <Card size="small">
             <Statistic
-              title="Provider Cloud Terhubung"
-              value={overview?.connected_providers ?? 3}
-              suffix={`/ ${overview?.total_providers ?? 4} Node`}
-              prefix={<CloudServerOutlined style={{ color: ENTERPRISE_TOKENS.statusOnline }} />}
+              title="Penyimpanan Lokal Snapshot"
+              value={overview?.local_used_mb ?? 0}
+              suffix="MB"
+              prefix={<HddOutlined style={{ color: ENTERPRISE_TOKENS.primaryColor }} />}
             />
             <div style={{ marginTop: 6, fontSize: 12, color: ENTERPRISE_TOKENS.textSecondary }}>
-              Strategi Routing: <strong>{overview?.policy?.routing_strategy || 'WEIGHTED_FAILOVER'}</strong>
+              Total File Snapshot: <strong>{overview?.local_snapshots_count ?? 0} File</strong>
             </div>
           </Card>
         </Col>
+
         <Col xs={24} sm={8}>
           <Card size="small">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Statistic
-                title="Kebijakan Auto-Tiering & Pre-Alarm"
-                value={`${overview?.policy?.local_retention_hours ?? 48} Jam Lokal`}
-                prefix={<SafetyOutlined style={{ color: ENTERPRISE_TOKENS.badgeVehicle }} />}
-              />
-              <Switch
-                checked={overview?.policy?.auto_tiering_enabled ?? true}
-                onChange={handleToggleAutoTiering}
-              />
-            </div>
+            <Statistic
+              title="Kebijakan Retensi Data"
+              value={`${overview?.policy?.local_retention_days ?? 7} Hari Lokal`}
+              prefix={<SafetyOutlined style={{ color: ENTERPRISE_TOKENS.badgeVehicle }} />}
+            />
             <div style={{ marginTop: 6, fontSize: 12, color: ENTERPRISE_TOKENS.textSecondary }}>
-              Pre-Event Buffer: <strong>{overview?.policy?.pre_event_buffer_sec ?? 5}s</strong> • Arsip Cloud: <strong>{overview?.policy?.cloud_retention_days ?? 90} Hari</strong>
+              Auto-Sync Insiden Kritis: <strong>{overview?.policy?.auto_sync_critical_events ? 'Aktif' : 'Nonaktif'}</strong>
             </div>
           </Card>
         </Col>
       </Row>
 
-      <Card size="small" title="Daftar Storage Provider dalam Pool">
-        <Table
-          dataSource={overview?.providers || []}
-          columns={providerColumns}
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          size="small"
-        />
-      </Card>
-
-      <Card size="small" title="Riwayat Job Sinkronisasi & Tiering Rekaman">
+      <Card size="small" title="Riwayat Job Upload ke S3 Cloud Storage">
         <Table
           dataSource={overview?.recent_jobs || []}
           rowKey="id"
           size="small"
           pagination={{ pageSize: 5 }}
           columns={[
-            { title: 'Nama File Klip / Bundle', dataIndex: 'filename', key: 'filename', render: (t: string) => <span className="mono-text">{t}</span> },
-            { title: 'Kamera Sumber', dataIndex: 'source_camera', key: 'source_camera' },
-            { title: 'Target Cloud Provider', dataIndex: 'target_provider', key: 'target_provider', render: (t: string) => <Tag color="blue">{t}</Tag> },
+            { title: 'Nama File', dataIndex: 'filename', key: 'filename', render: (t: string) => <span className="mono-text">{t}</span> },
+            { title: 'S3 Key / Lokasi', dataIndex: 's3_key', key: 's3_key', render: (k: string) => <Tag color="blue">{k || 'Lokal'}</Tag> },
             { title: 'Ukuran', dataIndex: 'size_mb', key: 'size_mb', render: (v: number) => `${v} MB` },
-            { title: 'Status', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color="success">{s}</Tag> },
+            {
+              title: 'Status',
+              dataIndex: 'status',
+              key: 'status',
+              render: (s: string) => (
+                <Tag color={s === 'COMPLETED' ? 'success' : s === 'FAILED' ? 'error' : 'default'}>{s}</Tag>
+              ),
+            },
           ]}
         />
       </Card>
 
       <Modal
-        title="Hubungkan Cloud Storage Provider Baru ke Pool"
-        open={addModalOpen}
-        onCancel={() => setAddModalOpen(false)}
-        onOk={handleAddProvider}
-        okText="Hubungkan Provider"
+        title="Pengaturan S3 Object Storage & Retensi"
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={handleSavePolicy}
+        okText="Simpan Konfigurasi"
       >
         <Form layout="vertical">
-          <Form.Item label="Nama Provider" required>
-            <Input value={provName} onChange={(e) => setProvName(e.target.value)} placeholder="Contoh: Backblaze B2 Cold Archive" />
+          <Form.Item label="S3 Bucket Name" required>
+            <Input value={s3Bucket} onChange={(e) => setS3Bucket(e.target.value)} placeholder="Contoh: cctv-enterprise-bucket" />
           </Form.Item>
-          <Form.Item label="Tipe Protokol Cloud">
-            <Select
-              value={provType}
-              onChange={(v) => setProvType(v)}
-              options={[
-                { value: 'GOOGLE_DRIVE', label: 'Google Drive API' },
-                { value: 'ONEDRIVE', label: 'Microsoft OneDrive Graph' },
-                { value: 'S3_COMPATIBLE', label: 'AWS S3 / Cloudflare R2 / MinIO' },
-                { value: 'LOCAL_DISK', label: 'Local / NAS Mount' },
-              ]}
-            />
+          <Form.Item label="S3 Endpoint URL (Kosongkan jika menggunakan AWS Default)">
+            <Input value={s3Endpoint} onChange={(e) => setS3Endpoint(e.target.value)} placeholder="Contoh: https://<account>.r2.cloudflarestorage.com" />
           </Form.Item>
-          <Form.Item label="URI / Bucket Endpoint" required>
-            <Input value={provEndpoint} onChange={(e) => setProvEndpoint(e.target.value)} />
+          <Form.Item label="AWS Region">
+            <Input value={s3Region} onChange={(e) => setS3Region(e.target.value)} placeholder="auto atau us-east-1" />
           </Form.Item>
-          <Form.Item label="Tier Penyimpanan">
-            <Select
-              value={provTier}
-              onChange={(v) => setProvTier(v)}
-              options={[
-                { value: 'HOT (Tier 1)', label: 'HOT (Tier 1 - Akses Instan)' },
-                { value: 'WARM (Tier 2)', label: 'WARM (Tier 2 - Cloud Standar)' },
-                { value: 'COLD (Tier 3)', label: 'COLD (Tier 3 - Arsip Jangka Panjang)' },
-              ]}
-            />
+          <Form.Item label="Prefix / Folder Path di S3">
+            <Input value={s3Prefix} onChange={(e) => setS3Prefix(e.target.value)} placeholder="cctv" />
           </Form.Item>
-          <Form.Item label="Kuota Penyimpanan (GB)">
-            <InputNumber value={provQuota} onChange={(v) => setProvQuota(Number(v || 500))} min={50} max={50000} style={{ width: '100%' }} />
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="Retensi Lokal (Hari)">
+                <InputNumber value={localDays} onChange={(v) => setLocalDays(Number(v || 7))} min={1} max={365} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="Retensi Cloud (Hari)">
+                <InputNumber value={cloudDays} onChange={(v) => setCloudDays(Number(v || 90))} min={7} max={3650} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item label="Auto-Upload Bukti Insiden Kritis ke Cloud">
+            <Switch checked={autoSync} onChange={(v) => setAutoSync(v)} />
           </Form.Item>
         </Form>
       </Modal>
     </Space>
   );
 };
-

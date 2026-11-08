@@ -2,32 +2,47 @@ version: "3.9"
 
 services:
   qdrant:
-    image: qdrant/qdrant:latest
-    container_name: cctv_new_qdrant
+    image: qdrant/qdrant:v1.8.4
+    container_name: cctv_qdrant
+    restart: always
     ports:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
-    restart: unless-stopped
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: cctv_new_backend
+    container_name: cctv_backend
+    restart: always
     ports:
       - "8000:8000"
     environment:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
-      - AI_DEVICE=auto
+      - AI_DEVICE=cpu
+      - DATABASE_PATH=/app/storage/cctv.db
+      - STORAGE_DIR=/app/storage
+      - MEDIA_DIR=/app/media
     volumes:
-      - ./backend/media:/app/media
-      - ./backend/storage:/app/storage
+      - cctv_storage:/app/storage
+      - cctv_media:/app/media
     depends_on:
       - qdrant
-    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cctv_frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
 
 volumes:
   qdrant_data:
-
+  cctv_storage:
+  cctv_media:

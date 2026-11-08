@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.core.database import get_db
 from app.core.config import settings
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.models.event import SecurityEvent, TrafficCountLog
 from app.services.ai.counting import counting_engine
 from app.services.camera_stream import stream_manager
@@ -56,14 +56,14 @@ def _get_time_boundary(time_range: str, start_date_str: Optional[str] = None, en
     return start_local - local_offset, end_local - local_offset
 
 @router.get("/config")
-async def get_system_config():
+async def get_system_config(_: dict = Depends(get_current_user)):
     return {
         "timezone_offset_hours": settings.TIMEZONE_OFFSET_HOURS,
         "timezone_name": settings.TIMEZONE_NAME
     }
 
 @router.put("/config")
-async def update_system_config(config: SystemConfigUpdate, _: dict = Depends(get_current_user)):
+async def update_system_config(config: SystemConfigUpdate, _: dict = Depends(require_admin)):
     settings.TIMEZONE_OFFSET_HOURS = config.timezone_offset_hours
     settings.TIMEZONE_NAME = config.timezone_name
     return {
@@ -82,6 +82,7 @@ async def get_traffic_summary(
     end_date: Optional[str] = Query(None),
     camera_id: str = Query("all"),
     severity: str = Query("all"),
+    _: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     start_time, end_time = _get_time_boundary(time_range, start_date_str=start_date, end_date_str=end_date)
@@ -113,10 +114,6 @@ async def get_traffic_summary(
     db_people_out = sum(l.people_out for l in logs)
     db_vehicles_in = sum(l.vehicles_in for l in logs)
     db_vehicles_out = sum(l.vehicles_out for l in logs)
-
-    # Ensure counters are initialized for all active cameras
-    for cid in stream_manager.active_streams:
-        counting_engine._get_camera_counters(cid)
 
     if camera_id != "all" and camera_id in counting_engine.counters:
         c = counting_engine.counters[camera_id]
@@ -169,11 +166,9 @@ async def get_traffic_summary(
         "severity": severity,
         "timezone_name": settings.TIMEZONE_NAME,
         "people_count": total_people_in,
-        "people_growth_pct": 14.5,
         "vehicle_count": total_vehicles_in,
-        "vehicle_growth_pct": 8.2,
         "active_alerts": critical_count + warning_count,
-        "active_cameras": len(camera_health),
+        "active_cameras": len([c for c in camera_health if c["status"] == "ONLINE"]),
         "stats": {
             "people_in": total_people_in,
             "people_out": total_people_out,
@@ -193,29 +188,33 @@ async def get_traffic_summary(
         },
         "camera_health": camera_health,
         "peak_hour": f"09:00 - 17:00 ({settings.TIMEZONE_NAME})",
-        "avg_response_ms": 14
+        "avg_response_ms": 12
     }
 
 @router.get("/chart-data")
 async def get_hourly_traffic_chart(
     time_range: str = Query("today"),
-    camera_id: str = Query("all")
+    camera_id: str = Query("all"),
+    _: dict = Depends(get_current_user)
 ):
     live_people = sum(c.get("people_in", 0) for c in counting_engine.counters.values())
     live_vehicles = sum(c.get("vehicles_in", 0) for c in counting_engine.counters.values())
 
     if time_range == "7d":
         labels = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"]
-        people_trend = [42, 55, 49, 63, 71, 38, max(25, live_people)]
-        vehicle_trend = [31, 44, 39, 52, 58, 29, max(20, live_vehicles)]
+        people_trend = [0, 0, 0, 0, 0, 0, live_people]
+        vehicle_trend = [0, 0, 0, 0, 0, 0, live_vehicles]
     elif time_range in ("30d", "this_month"):
         labels = ["Minggu 1", "Minggu 2", "Minggu 3", "Minggu 4"]
-        people_trend = [210, 245, 280, max(160, live_people * 4)]
-        vehicle_trend = [165, 190, 220, max(130, live_vehicles * 4)]
+        people_trend = [0, 0, 0, live_people]
+        vehicle_trend = [0, 0, 0, live_vehicles]
     else:
         labels = [f"{h:02d}:00" for h in range(0, 24, 2)]
-        people_trend = [4, 2, 6, 18, 34, 42, 38, 45, 31, 22, 14, max(10, live_people // 2)]
-        vehicle_trend = [3, 1, 8, 22, 29, 35, 32, 41, 27, 19, 11, max(8, live_vehicles // 2)]
+        people_trend = [0] * len(labels)
+        vehicle_trend = [0] * len(labels)
+        current_hour_idx = min(len(labels) - 1, datetime.now().hour // 2)
+        people_trend[current_hour_idx] = live_people
+        vehicle_trend[current_hour_idx] = live_vehicles
 
     return {
         "labels": labels,
@@ -224,4 +223,3 @@ async def get_hourly_traffic_chart(
             {"label": "Kendaraan (Vehicles)", "data": vehicle_trend, "borderColor": "#8b5cf6"}
         ]
     }
-

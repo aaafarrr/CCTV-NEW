@@ -7,19 +7,71 @@ logger = logging.getLogger("cctv_new.v380_scanner")
 
 class V380ScannerService:
     """
-    Scanner for Macro-Video V380 / V380 Pro cameras (UDP 10008 -> 10009)
-    and ONVIF WS-Discovery cameras (UDP Multicast 239.255.255.250:3702).
+    Real Local Network Camera Discovery:
+    1. Macro-Video V380/V380 Pro cameras: Broadcasts NVDEVSEARCH^100 packet to 255.255.255.255:10008, listens on 10009.
+    2. ONVIF WS-Discovery: Multicasts XML Probe to 239.255.255.250:3702.
+    Returns real discovered LAN devices. Zero dummy data.
     """
     DISCOVERY_PORT = 10008
     LISTEN_PORT = 10009
-    DISCOVERY_PAYLOAD = bytes.fromhex(
-        "4e564445565345415243485e313030" + ("00" * 241)
-    )
+    DISCOVERY_PAYLOAD = bytes.fromhex("4e564445565345415243485e313030" + ("00" * 241))
     ONVIF_MCAST_GRP = "239.255.255.250"
     ONVIF_MCAST_PORT = 3702
 
     @classmethod
-    def scan_onvif_lan(cls, timeout: float = 0.8, include_demo: bool = True) -> List[Dict[str, Any]]:
+    def scan_lan(cls, timeout: float = 1.0) -> List[Dict[str, Any]]:
+        found_cameras: List[Dict[str, Any]] = []
+        listen_sock = None
+        send_sock = None
+
+        try:
+            listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            listen_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listen_sock.bind(("", cls.LISTEN_PORT))
+            listen_sock.settimeout(timeout)
+
+            send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            send_sock.sendto(cls.DISCOVERY_PAYLOAD, ("255.255.255.255", cls.DISCOVERY_PORT))
+
+            while True:
+                try:
+                    data, addr = listen_sock.recvfrom(4096)
+                    ip = addr[0]
+                    raw_str = data.decode("latin-1", errors="ignore")
+                    parts = [p.strip("\x00") for p in raw_str.split("^") if p.strip("\x00")]
+                    device_id = parts[1] if len(parts) > 1 else f"V380-{ip.split('.')[-1]}"
+
+                    found_cameras.append({
+                        "ip": ip,
+                        "port": 554,
+                        "device_id": device_id,
+                        "hw_model": "V380 / Macro-Video IPC",
+                        "manufacturer": "Macro-Video Technologies",
+                        "rtsp_url": f"rtsp://admin:admin123@{ip}:554/live/ch0",
+                        "sd_patch_status": "Ready",
+                        "source": "UDP Broadcast 10008/10009"
+                    })
+                except socket.timeout:
+                    break
+        except Exception as e:
+            logger.debug(f"V380 UDP scan: {e}")
+        finally:
+            if listen_sock:
+                try:
+                    listen_sock.close()
+                except Exception:
+                    pass
+            if send_sock:
+                try:
+                    send_sock.close()
+                except Exception:
+                    pass
+
+        return found_cameras
+
+    @classmethod
+    def scan_onvif_lan(cls, timeout: float = 1.0) -> List[Dict[str, Any]]:
         found: List[Dict[str, Any]] = []
         sock = None
         probe_xml = (
@@ -48,27 +100,26 @@ class V380ScannerService:
                         continue
                     seen_ips.add(ip)
                     xml_str = data.decode("utf-8", errors="ignore")
-                    hw_model = "ONVIF-NVT"
+                    mfg = "ONVIF Camera"
                     if "Hikvision" in xml_str:
-                        mfg = "Hikvision Enterprise"
+                        mfg = "Hikvision"
                     elif "Dahua" in xml_str:
-                        mfg = "Dahua Technology"
-                    else:
-                        mfg = "Standard ONVIF NVT"
+                        mfg = "Dahua"
+
                     found.append({
                         "ip": ip,
                         "port": 554,
                         "device_id": f"ONVIF-{ip.split('.')[-1]}",
-                        "hw_model": hw_model,
+                        "hw_model": "Profile S/T Device",
                         "manufacturer": mfg,
                         "rtsp_url": f"rtsp://admin:admin123@{ip}:554/Streaming/Channels/101",
-                        "sd_patch_status": "Native ONVIF Profile S/T",
-                        "source": "WS-Discovery Multicast 239.255.255.250:3702"
+                        "sd_patch_status": "Native ONVIF",
+                        "source": "WS-Discovery (239.255.255.250:3702)"
                     })
                 except socket.timeout:
                     break
         except Exception as e:
-            logger.debug(f"ONVIF WS-Discovery info: {e}")
+            logger.debug(f"ONVIF WS-Discovery scan: {e}")
         finally:
             if sock:
                 try:
@@ -76,120 +127,19 @@ class V380ScannerService:
                 except Exception:
                     pass
 
-        if not found and include_demo:
-            found = [
-                {
-                    "ip": "192.168.1.105",
-                    "port": 554,
-                    "device_id": "ONVIF-HIK-4K01",
-                    "hw_model": "DS-2CD2143G2-I",
-                    "manufacturer": "Hikvision Enterprise",
-                    "rtsp_url": "synthetic_lobby",
-                    "sd_patch_status": "Native ONVIF Profile S/T",
-                    "source": "WS-Discovery Multicast 239.255.255.250:3702"
-                },
-                {
-                    "ip": "192.168.1.109",
-                    "port": 554,
-                    "device_id": "ONVIF-DAH-PTZ2",
-                    "hw_model": "IPC-HFW2431S",
-                    "manufacturer": "Dahua Technology",
-                    "rtsp_url": "synthetic_parking",
-                    "sd_patch_status": "Native ONVIF Profile S",
-                    "source": "WS-Discovery Multicast 239.255.255.250:3702"
-                }
-            ]
         return found
-
-    @classmethod
-    def scan_lan(cls, timeout: float = 1.2, include_demo: bool = True) -> List[Dict[str, Any]]:
-        found_cameras: List[Dict[str, Any]] = []
-        listen_sock = None
-        send_sock = None
-
-        try:
-            listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            listen_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            listen_sock.bind(("", cls.LISTEN_PORT))
-            listen_sock.settimeout(timeout)
-
-            send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            send_sock.sendto(cls.DISCOVERY_PAYLOAD, ("255.255.255.255", cls.DISCOVERY_PORT))
-
-            while True:
-                try:
-                    data, addr = listen_sock.recvfrom(4096)
-                    ip = addr[0]
-                    raw_str = data.decode("latin-1", errors="ignore")
-                    parts = [p.strip("\x00") for p in raw_str.split("^") if p.strip("\x00")]
-                    device_id = parts[1] if len(parts) > 1 else f"V380-{ip.split('.')[-1]}"
-
-                    found_cameras.append({
-                        "ip": ip,
-                        "port": 554,
-                        "device_id": device_id,
-                        "hw_model": "KM01D_WF / V380 Pro",
-                        "manufacturer": "Macro-Video Technologies (V380)",
-                        "rtsp_url": f"rtsp://admin:admin123@{ip}:554/live/ch0",
-                        "sd_patch_status": "Ready (V380-Web RTSP Daemon)",
-                        "source": "UDP Broadcast 10008/10009"
-                    })
-                except socket.timeout:
-                    break
-        except Exception as e:
-            logger.debug(f"V380 UDP scan info: {e}")
-        finally:
-            if listen_sock:
-                try:
-                    listen_sock.close()
-                except Exception:
-                    pass
-            if send_sock:
-                try:
-                    send_sock.close()
-                except Exception:
-                    pass
-
-        if not found_cameras and include_demo:
-            found_cameras = [
-                {
-                    "ip": "192.168.1.118",
-                    "port": 554,
-                    "device_id": "MV-38904128",
-                    "hw_model": "HW_HsAkQQWG_WIFI (KM01D_WF)",
-                    "manufacturer": "Macro-Video V380 Pro",
-                    "rtsp_url": "synthetic_gate",
-                    "sd_patch_status": "Unlocked via V380-Web SD Patch",
-                    "source": "NVDEVSEARCH^100 (UDP 10008 -> 10009)"
-                },
-                {
-                    "ip": "192.168.1.124",
-                    "port": 554,
-                    "device_id": "MV-55201944",
-                    "hw_model": "Hw_HsAKPIQL_4G (V380E6_G1)",
-                    "manufacturer": "Macro-Video V380 Outdoor PTZ",
-                    "rtsp_url": "synthetic_warehouse",
-                    "sd_patch_status": "Unlocked via V380-Web SD Patch",
-                    "source": "NVDEVSEARCH^100 (UDP 10008 -> 10009)"
-                }
-            ]
-
-        return found_cameras
 
     @classmethod
     def get_rtsp_unlock_guide(cls) -> Dict[str, Any]:
         return {
-            "protocol": "Macro-Video V380 UDP Discovery (Port 10008 -> 10009)",
-            "packet_signature": "NVDEVSEARCH^100 (4e564445565345415243485e313030)",
+            "protocol": "Macro-Video V380 RTSP Patch Guide",
             "steps": [
-                "Format kartu MicroSD dalam sistem file FAT32.",
-                "Ekstrak paket patch V380-Web (httpd_KM01D_WF / V380E6_G1) ke root MicroSD.",
-                "Masukkan MicroSD ke kamera V380 dalam keadaan mati, lalu nyalakan daya.",
-                "Daemon RTSP otomatis aktif di rtsp://<IP_KAMERA>:554/live/ch0 dan Web UI di http://<IP_KAMERA>:8080.",
-                "Klik tombol 'Pindai V380 LAN' di atas untuk mendeteksi IP kamera secara otomatis."
+                "Format kartu MicroSD (FAT32, <=32GB).",
+                "Ekstrak patch RTSP daemon kamera V380 ke direktori root MicroSD.",
+                "Masukkan MicroSD ke kamera V380 dalam kondisi mati, lalu hubungkan adaptor listrik.",
+                "Kamera akan otomatis mengaktifkan stream RTSP lokal di port 554 (rtsp://admin:password@<IP>:554/live/ch0).",
+                "Gunakan tombol Pindai LAN di atas untuk menemukan IP perangkat secara otomatis."
             ]
         }
 
 v380_scanner = V380ScannerService()
-

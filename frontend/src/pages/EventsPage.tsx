@@ -243,9 +243,6 @@ export const EventsPage: React.FC<EventsPageProps> = ({ onCriticalTriggered }) =
                 { value: 'INFO', label: '🔵 Informasi (Info)' },
               ]}
             />
-            <Button type="primary" danger ghost icon={<ThunderboltOutlined />} onClick={handleSimulateFall}>
-              Uji Deteksi Jatuh (Fall Alert)
-            </Button>
             <Button icon={<ReloadOutlined spin={loading} />} onClick={fetchAlerts}>
               Segarkan
             </Button>

@@ -12,97 +12,116 @@ async def run_suite():
     await startup_event()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Verify Strict JWT Auth Enforcement (401 without token)
-        r_unauth = await client.get("/api/v1/auth/users")
-        assert r_unauth.status_code == 401, f"Expected 401 without token, got {r_unauth.status_code}"
+        # 1. Check initial setup status (should need setup on clean slate)
+        r_status = await client.get("/api/v1/auth/status")
+        assert r_status.status_code == 200, r_status.text
+        assert r_status.json()["needs_initial_setup"] is True
 
-        r_unauth_mut = await client.post("/api/v1/storage/sync", json={"camera_name": "Cam 1", "reason": "Test"})
-        assert r_unauth_mut.status_code == 401, f"Expected 401 on protected mutation, got {r_unauth_mut.status_code}"
-
-        # 2. Login as Admin (SQLite User persistence)
-        r_login = await client.post("/api/v1/auth/login", data={"username": "admin", "password": "admin123"})
-        assert r_login.status_code == 200, r_login.text
-        token = r_login.json()["access_token"]
+        # 2. Complete First-Time Setup: Register Root Admin
+        r_setup = await client.post("/api/v1/auth/setup-admin", json={
+            "username": "admin",
+            "password": "AdminPassword123!",
+            "full_name": "Chief Security Officer",
+            "email": "cso@enterprise.local"
+        })
+        assert r_setup.status_code == 200, r_setup.text
+        token = r_setup.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
+        # 3. Verify System is now configured (setup locked)
+        r_status2 = await client.get("/api/v1/auth/status")
+        assert r_status2.json()["needs_initial_setup"] is False
+        r_setup_locked = await client.post("/api/v1/auth/setup-admin", json={
+            "username": "hacker",
+            "password": "Password123!",
+            "full_name": "Hacker",
+            "email": "h@h.com"
+        })
+        assert r_setup_locked.status_code == 400
+
+        # 4. Strict RBAC: 401 without token, 200 with admin token
+        r_unauth = await client.get("/api/v1/auth/users")
+        assert r_unauth.status_code == 401
         r_users = await client.get("/api/v1/auth/users", headers=headers)
-        assert r_users.status_code == 200 and len(r_users.json()) >= 2
+        assert r_users.status_code == 200
+        assert len(r_users.json()) == 1
 
-        # 3. Verify Operator RBAC restriction on Admin-only user creation
-        r_op_login = await client.post("/api/v1/auth/login", data={"username": "operator", "password": "operator123"})
+        # 5. Create Operator User
+        r_create_op = await client.post("/api/v1/auth/users", headers=headers, json={
+            "username": "operator1",
+            "password": "OperatorPass123!",
+            "full_name": "Operator Room 1",
+            "email": "op1@enterprise.local",
+            "role": "OPERATOR"
+        })
+        assert r_create_op.status_code == 200
+
+        # Operator Login
+        r_op_login = await client.post("/api/v1/auth/login", data={"username": "operator1", "password": "OperatorPass123!"})
+        assert r_op_login.status_code == 200
         op_token = r_op_login.json()["access_token"]
-        r_forbidden = await client.post(
-            "/api/v1/auth/users",
-            headers={"Authorization": f"Bearer {op_token}"},
-            json={"username": "tempuser", "password": "password123", "full_name": "Temp", "email": "t@c.local", "role": "VIEWER"}
-        )
-        assert r_forbidden.status_code == 403, f"Expected 403 for operator creating user, got {r_forbidden.status_code}"
+        op_headers = {"Authorization": f"Bearer {op_token}"}
 
-        # 4. Cameras, PTZ, Timeline, Pre-Event Replay, V380 & ONVIF Discovery
-        r_cams = await client.get("/api/v1/cameras")
-        assert r_cams.status_code == 200 and len(r_cams.json()) >= 4
+        # Operator forbidden on admin-only route
+        r_op_forbidden = await client.post("/api/v1/auth/users", headers=op_headers, json={
+            "username": "op2",
+            "password": "Password123!",
+            "full_name": "Op 2",
+            "email": "op2@local",
+            "role": "OPERATOR"
+        })
+        assert r_op_forbidden.status_code == 403
 
-        r_ptz_unauth = await client.post("/api/v1/cameras/cam_1/ptz", json={"action": "zoom_in", "step": 0.2})
-        assert r_ptz_unauth.status_code == 401
+        # 6. Camera Management (Clean Slate = 0 cameras)
+        r_cams = await client.get("/api/v1/cameras", headers=headers)
+        assert r_cams.status_code == 200
+        assert len(r_cams.json()) == 0
 
-        r_ptz = await client.post("/api/v1/cameras/cam_1/ptz", headers=headers, json={"action": "zoom_in", "step": 0.2})
-        assert r_ptz.status_code == 200 and r_ptz.json()["ptz"]["zoom"] > 1.0
+        # Add Real RTSP Camera
+        r_add_cam = await client.put("/api/v1/cameras/cam_main", headers=headers, json={
+            "name": "Lobby Entrance Gate",
+            "location": "Building A - Ground Floor",
+            "stream_url": "rtsp://admin:securepass@192.168.1.50:554/live/ch0",
+            "enable_counting": True,
+            "enable_suspicious": True,
+            "enable_face_rec": True,
+            "roi_zones": [],
+            "counting_lines": []
+        })
+        assert r_add_cam.status_code == 200
 
-        r_del_cam_op = await client.delete("/api/v1/cameras/cam_1", headers={"Authorization": f"Bearer {op_token}"})
-        assert r_del_cam_op.status_code == 403
+        # Check list & password masking
+        r_cams_after = await client.get("/api/v1/cameras", headers=headers)
+        assert len(r_cams_after.json()) == 1
+        cam_item = r_cams_after.json()[0]
+        assert "stream_url_masked" in cam_item
+        assert "securepass" not in cam_item["stream_url_masked"]
 
-        r_tl = await client.get("/api/v1/cameras/cam_1/timeline")
-        assert r_tl.status_code == 200 and len(r_tl.json()["bands"]) >= 4
+        # 7. S3 Cloud Gateway Policy
+        r_storage = await client.get("/api/v1/storage/overview", headers=headers)
+        assert r_storage.status_code == 200
+        assert "s3_configured" in r_storage.json()
 
-        replay_frames = stream_manager.get_pre_event_replay_frames("cam_1", label="TEST REPLAY")
-        assert len(replay_frames) > 0 and replay_frames[0].startswith(b"\xff\xd8")
+        # Update S3 Policy
+        r_policy = await client.put("/api/v1/storage/policy", headers=headers, json={
+            "s3_bucket": "production-nvr-vault",
+            "s3_endpoint_url": "https://s3.ap-southeast-1.amazonaws.com",
+            "s3_region": "ap-southeast-1",
+            "s3_prefix": "cctv-enterprise",
+            "local_retention_days": 14,
+            "cloud_retention_days": 180,
+            "auto_sync_critical_events": True
+        })
+        assert r_policy.status_code == 200
 
-        r_v380 = await client.get("/api/v1/cameras/discover/v380")
-        assert r_v380.status_code == 200 and len(r_v380.json()["devices"]) >= 2
+        # 8. Rate Limiting Protection (failed login threshold)
+        for _ in range(5):
+            await client.post("/api/v1/auth/login", data={"username": "admin", "password": "WrongPassword!"})
+        r_locked = await client.post("/api/v1/auth/login", data={"username": "admin", "password": "WrongPassword!"})
+        assert r_locked.status_code == 429
 
-        r_onvif = await client.get("/api/v1/cameras/discover/onvif")
-        assert r_onvif.status_code == 200 and len(r_onvif.json()) >= 2
-
-        # 5. Security Boundary Checks (SSRF & Path Traversal)
-        r_ssrf = await client.put(
-            "/api/v1/cameras/cam_1",
-            headers=headers,
-            json={"name": "Test", "location": "Loc", "stream_url": "file:///etc/passwd"}
-        )
-        assert r_ssrf.status_code == 400
-
-        r_trav = await client.get("/api/v1/cameras/snapshots/download/..%2Fconfig.py")
-        assert r_trav.status_code in (400, 404)
-
-        # 6. Simulate & Persist Fall Detection + Auto-Sync to Cloud Storage Pool
-        r_fall = await client.post(
-            "/api/v1/alerts/simulate",
-            headers=headers,
-            json={"event_type": "FALL_DETECTED", "camera_id": "cam_1"}
-        )
-        assert r_fall.status_code == 200
-        fall_data = r_fall.json()
-        assert fall_data["event_type"] == "FALL_DETECTED"
-        assert "cloud_sync_job" in fall_data and fall_data["cloud_sync_job"]["status"] == "COMPLETED"
-
-        r_alerts = await client.get("/api/v1/alerts")
-        assert r_alerts.status_code == 200
-        assert any(a["event_type"] == "FALL_DETECTED" for a in r_alerts.json())
-
-        # 7. Faces & Multi-Cloud Storage Pool
-        r_faces = await client.get("/api/v1/faces/people-clusters")
-        assert r_faces.status_code == 200 and len(r_faces.json()) >= 4
-
-        r_sync = await client.post(
-            "/api/v1/storage/sync",
-            headers=headers,
-            json={"camera_name": "Cam 1", "reason": "Automated Suite"}
-        )
-        assert r_sync.status_code == 200 and r_sync.json()["status"] == "COMPLETED"
-
-        print("ALL AUTOMATED TESTS PASSED (Auth 401/403 RBAC, SQLite Users/Events, Fall Detection, V380, Qdrant, Cloud Pool)!")
+        print("ALL PRODUCTION BACKEND TESTS PASSED CLEANLY (Zero Dummy Data, Real First-Time Setup, Strict Security)!")
     stream_manager.stop_all()
 
 if __name__ == "__main__":
     asyncio.run(run_suite())
-

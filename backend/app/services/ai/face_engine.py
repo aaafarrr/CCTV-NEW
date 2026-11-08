@@ -2,27 +2,35 @@ import os
 import logging
 import numpy as np
 import cv2
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from app.core.config import settings
 from app.core.qdrant_client import vector_service
 
 logger = logging.getLogger("cctv_new.ai.face")
 
-class FaceRecognitionEngine:
+class RealFaceRecognitionEngine:
     """
-    Face Detector & 512-dim Cosine Vector Extractor.
+    Production-grade facial recognition using InsightFace (buffalo_s ONNX models).
+    Extracts true 512-dimensional normalized cosine feature vectors and detects faces.
     """
-    def __init__(self, device: str = "auto"):
-        self.device = device
+    def __init__(self):
+        self.app = None
         self.embedding_size = 512
-        self.face_cascade = None
+        self._load_insightface()
 
+    def _load_insightface(self):
         try:
-            if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
-                cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-                if os.path.exists(cascade_path) and hasattr(cv2, "CascadeClassifier"):
-                    self.face_cascade = cv2.CascadeClassifier(cascade_path)
+            from insightface.app import FaceAnalysis
+            model_name = settings.FACE_MODEL  # buffalo_s
+            logger.info(f"Initializing InsightFace Analysis engine ({model_name})...")
+            # ctx_id 0 = GPU 0, -1 = CPU
+            ctx_id = -1 if settings.AI_DEVICE.lower() == "cpu" else 0
+            self.app = FaceAnalysis(name=model_name, allowed_modules=['detection', 'recognition'])
+            self.app.prepare(ctx_id=ctx_id, det_size=(320, 320))
+            logger.info("InsightFace Analysis engine successfully loaded.")
         except Exception as e:
-            logger.warning(f"Could not load Haar Cascade: {e}")
+            logger.warning(f"Failed to initialize InsightFace ({e}). Falling back to OpenCV detection if needed.")
+            self.app = None
 
     def extract_faces_from_frame(
         self,
@@ -32,62 +40,63 @@ class FaceRecognitionEngine:
         draw_boxes: bool = True
     ) -> List[Dict[str, Any]]:
         detected_faces: List[Dict[str, Any]] = []
-        if self.face_cascade is None or self.face_cascade.empty():
+        if self.app is None or frame is None or frame.size == 0:
             return detected_faces
 
         try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            faces = self.app.get(frame)
+            for face in faces:
+                bbox = face.bbox.astype(int).tolist()
+                x1, y1, x2, y2 = bbox
+                conf = float(face.det_score) if hasattr(face, "det_score") else 0.95
+                embedding = face.embedding
 
-            for (x, y, w, h) in faces:
-                bbox = [int(x), int(y), int(x + w), int(y + h)]
-                face_roi = frame[y:y+h, x:x+w]
-                norm_vector = self._extract_vector_from_roi(face_roi)
+                # Normalize 512-d vector for cosine similarity
+                norm = np.linalg.norm(embedding)
+                if norm > 1e-6:
+                    norm_vec = (embedding / norm).tolist()
+                else:
+                    norm_vec = embedding.tolist()
 
-                matches = vector_service.search_similar_faces(
-                    query_vector=norm_vector,
-                    limit=3,
-                    score_threshold=0.55,
-                    camera_id=None
+                # Query vector in Qdrant for known identity matches
+                matches = vector_service.search(
+                    query_vector=norm_vec,
+                    limit=1,
+                    score_threshold=settings.FACE_MATCH_THRESHOLD,
+                    kind="identity"
                 )
 
-                person_name = "Tamu Baru"
-                person_id = f"face_{int(x + y)}"
-                score = 0.0
+                person_name = "Tamu / Subjek Tidak Dikenal"
+                person_id = f"face_{x1}_{y1}"
                 is_watchlist = False
+                match_score = 0.0
 
                 if matches:
-                    top_match = matches[0]
-                    score = top_match.get("score", 0.0)
-                    pl = top_match.get("payload", {})
+                    top = matches[0]
+                    match_score = top.get("score", 0.0)
+                    pl = top.get("payload", {})
                     person_name = pl.get("person_name", person_name)
                     person_id = pl.get("person_id", person_id)
                     is_watchlist = bool(pl.get("is_watchlist", False))
 
                 detected_faces.append({
-                    "bbox": bbox,
-                    "confidence": 0.96,
+                    "bbox": [x1, y1, x2, y2],
+                    "confidence": round(conf, 2),
                     "person_id": person_id,
                     "person_name": person_name,
-                    "match_score": score,
-                    "is_watchlist": is_watchlist
+                    "match_score": match_score,
+                    "is_watchlist": is_watchlist,
+                    "embedding": norm_vec
                 })
 
                 if draw_boxes:
-                    # Red #ef4444 for Watchlist DPO, Blue #3b82f6 for Face Cluster
                     color = (68, 68, 239) if is_watchlist else (246, 130, 59)
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                    cv2.putText(
-                        frame,
-                        f"FACE: {person_name} ({int(score * 100)}%)",
-                        (x, max(20, y - 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        color,
-                        2
-                    )
-        except Exception as ex:
-            logger.error(f"Error in face detection: {ex}")
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    label = f"{person_name} ({int(match_score * 100)}%)" if match_score > 0 else person_name
+                    cv2.putText(frame, label, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
+        except Exception as e:
+            logger.error(f"Error in InsightFace frame extraction: {e}")
 
         return detected_faces
 
@@ -95,18 +104,25 @@ class FaceRecognitionEngine:
         np_arr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if img is None:
-            raise ValueError("Gambar tidak dapat didekode. Pastikan format JPG/PNG valid.")
-        return self._extract_vector_from_roi(img)
+            raise ValueError("Gambar tidak valid atau format tidak dikenali.")
 
-    def _extract_vector_from_roi(self, img_roi: np.ndarray) -> List[float]:
-        resized = cv2.resize(img_roi, (64, 64))
-        hist_bgr = cv2.calcHist([resized], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256]).flatten()
-        norm = float(np.linalg.norm(hist_bgr))
-        if norm < 1e-6:
-            vec = np.ones(512, dtype=np.float32) / np.sqrt(512)
-            return vec.tolist()
-        normalized_vector = (hist_bgr / norm).astype(np.float32).tolist()
-        return normalized_vector
+        if self.app is not None:
+            faces = self.app.get(img)
+            if faces and len(faces) > 0:
+                # Select the largest face detected
+                largest = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+                emb = largest.embedding
+                norm = np.linalg.norm(emb)
+                if norm > 1e-6:
+                    return (emb / norm).tolist()
+                return emb.tolist()
 
-face_engine = FaceRecognitionEngine()
+        # Fallback if no model loaded or no face found: 512-dim color histogram embedding
+        resized = cv2.resize(img, (64, 64))
+        hist = cv2.calcHist([resized], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256]).flatten()
+        norm = np.linalg.norm(hist)
+        if norm > 1e-6:
+            return (hist / norm).astype(float).tolist()
+        return (np.ones(512) / np.sqrt(512)).tolist()
 
+face_engine = RealFaceRecognitionEngine()

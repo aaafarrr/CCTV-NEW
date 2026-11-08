@@ -3,23 +3,28 @@ import time
 import asyncio
 import cv2
 from typing import List, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from pydantic import BaseModel, Field
+from app.core.config import settings
 from app.services.camera_stream import stream_manager
 from app.services.v380_scanner import v380_scanner
-from app.core.security import validate_safe_id, validate_safe_filename, validate_stream_url, get_current_user, require_admin
+from app.core.security import (
+    validate_safe_id,
+    validate_safe_filename,
+    validate_stream_url,
+    mask_stream_url,
+    get_current_user,
+    require_admin,
+    require_operator
+)
 
 router = APIRouter(prefix="/cameras", tags=["Cameras & PTZ"])
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-SNAPSHOT_DIR = os.path.join(BASE_DIR, "storage", "snapshots")
-os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-
 class CameraConfigUpdate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    location: str = Field(default="Area Umum", max_length=120)
-    stream_url: str = Field(default="synthetic_lobby", max_length=500)
+    location: str = Field(default="Area Pengawasan", max_length=120)
+    stream_url: str = Field(..., min_length=5, max_length=500)
     enable_counting: bool = True
     enable_suspicious: bool = True
     enable_face_rec: bool = True
@@ -31,10 +36,12 @@ class PTZCommand(BaseModel):
     step: float = Field(default=0.15, ge=0.05, le=0.5)
 
 @router.get("", response_model=List[Dict[str, Any]])
-async def list_cameras():
+async def list_cameras(_: Dict[str, Any] = Depends(get_current_user)):
     cams = []
     for cam_id, data in stream_manager.active_streams.items():
         cam_info = data["info"].copy()
+        # Mask sensitive RTSP passwords before returning to client
+        cam_info["stream_url_masked"] = mask_stream_url(cam_info.get("stream_url", ""))
         cam_info["status"] = "OFFLINE" if data.get("is_connecting") else "ONLINE"
         cam_info["ptz"] = stream_manager.ptz_states.get(cam_id, {"pan": 0.0, "tilt": 0.0, "zoom": 1.0})
         meta = data.get("latest_metadata", {})
@@ -45,12 +52,12 @@ async def list_cameras():
     return cams
 
 @router.get("/discover/onvif")
-async def discover_onvif_cameras():
-    return v380_scanner.scan_onvif_lan(timeout=0.8, include_demo=True)
+async def discover_onvif_cameras(_: Dict[str, Any] = Depends(require_admin)):
+    return v380_scanner.scan_onvif_lan(timeout=1.2)
 
 @router.get("/discover/v380")
-async def discover_v380_cameras():
-    devices = v380_scanner.scan_lan(timeout=0.8, include_demo=True)
+async def discover_v380_cameras(_: Dict[str, Any] = Depends(require_admin)):
+    devices = v380_scanner.scan_lan(timeout=1.2)
     guide = v380_scanner.get_rtsp_unlock_guide()
     return {
         "devices": devices,
@@ -58,27 +65,28 @@ async def discover_v380_cameras():
     }
 
 @router.get("/snapshots/download/{filename}")
-async def download_snapshot(filename: str):
+async def download_snapshot(filename: str, _: Dict[str, Any] = Depends(get_current_user)):
     safe_name = validate_safe_filename(filename)
-    file_path = os.path.realpath(os.path.join(SNAPSHOT_DIR, safe_name))
-    snap_root = os.path.realpath(SNAPSHOT_DIR)
+    file_path = os.path.realpath(os.path.join(settings.SNAPSHOT_DIR, safe_name))
+    snap_root = os.path.realpath(settings.SNAPSHOT_DIR)
     if not file_path.startswith(snap_root) or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File snapshot tidak ditemukan")
     return FileResponse(file_path, media_type="image/jpeg", filename=safe_name)
 
 @router.get("/{camera_id}", response_model=Dict[str, Any])
-async def get_camera(camera_id: str):
+async def get_camera(camera_id: str, _: Dict[str, Any] = Depends(get_current_user)):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
     data = stream_manager.active_streams[cid]
     cam_info = data["info"].copy()
+    cam_info["stream_url_masked"] = mask_stream_url(cam_info.get("stream_url", ""))
     cam_info["status"] = "OFFLINE" if data.get("is_connecting") else "ONLINE"
     cam_info["ptz"] = stream_manager.ptz_states.get(cid, {"pan": 0.0, "tilt": 0.0, "zoom": 1.0})
     return cam_info
 
 @router.put("/{camera_id}")
-async def update_camera(camera_id: str, config: CameraConfigUpdate, _: Dict[str, Any] = Depends(get_current_user)):
+async def update_camera(camera_id: str, config: CameraConfigUpdate, _: Dict[str, Any] = Depends(require_admin)):
     cid = validate_safe_id(camera_id, "Camera ID")
     safe_url = validate_stream_url(config.stream_url)
     if cid not in stream_manager.active_streams:
@@ -123,10 +131,10 @@ async def delete_camera(camera_id: str, _: Dict[str, Any] = Depends(require_admi
             except Exception:
                 pass
     stream_manager._save_persistent_cameras()
-    return {"status": "success", "message": f"Kamera {cid} dihapus"}
+    return {"status": "success", "message": f"Kamera {cid} berhasil dihapus"}
 
 @router.post("/{camera_id}/ptz")
-async def control_camera_ptz(camera_id: str, cmd: PTZCommand, _: Dict[str, Any] = Depends(get_current_user)):
+async def control_camera_ptz(camera_id: str, cmd: PTZCommand, _: Dict[str, Any] = Depends(require_operator)):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
@@ -134,7 +142,7 @@ async def control_camera_ptz(camera_id: str, cmd: PTZCommand, _: Dict[str, Any] 
     return {"status": "success", "camera_id": cid, "ptz": state}
 
 @router.get("/{camera_id}/timeline")
-async def get_camera_timeline(camera_id: str):
+async def get_camera_timeline(camera_id: str, _: Dict[str, Any] = Depends(get_current_user)):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
@@ -150,13 +158,16 @@ async def get_camera_timeline(camera_id: str):
 async def replay_pre_event_buffer(
     camera_id: str,
     request: Request,
-    label: str = Query("INSIDEN PERIMETER", description="Label insiden pada OSD replay")
+    label: str = Query("INSIDEN", description="Label insiden pada overlay OSD replay"),
+    _: Dict[str, Any] = Depends(get_current_user)
 ):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
 
     frames = stream_manager.get_pre_event_replay_frames(cid, label=label)
+    if not frames:
+        raise HTTPException(status_code=404, detail="Belum ada rekaman ring-buffer pre-event untuk kamera ini")
 
     async def replay_generator():
         idx = 0
@@ -164,13 +175,12 @@ async def replay_pre_event_buffer(
             while True:
                 if await request.is_disconnected():
                     break
-                if frames:
-                    jpg = frames[idx % len(frames)]
-                    idx += 1
-                    yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
-                    )
+                jpg = frames[idx % len(frames)]
+                idx += 1
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+                )
                 await asyncio.sleep(0.08)
         except (asyncio.CancelledError, Exception):
             pass
@@ -185,7 +195,8 @@ async def replay_pre_event_buffer(
 async def video_feed(
     camera_id: str,
     request: Request,
-    show_boxes: bool = Query(True, description="Tampilkan overlay AI bounding box")
+    show_boxes: bool = Query(True, description="Tampilkan overlay AI bounding box"),
+    _: Dict[str, Any] = Depends(get_current_user)
 ):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
@@ -202,7 +213,7 @@ async def video_feed(
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
                     )
-                await asyncio.sleep(0.06)
+                await asyncio.sleep(0.04)
         except (asyncio.CancelledError, Exception):
             pass
 
@@ -217,28 +228,11 @@ async def video_feed(
         }
     )
 
-@router.websocket("/{camera_id}/ws")
-async def websocket_camera_stream(
-    websocket: WebSocket,
-    camera_id: str,
-    show_boxes: bool = Query(True)
-):
-    await websocket.accept()
-    last_sent_bytes = None
-    try:
-        while True:
-            jpeg_bytes = stream_manager.get_latest_frame_jpeg(camera_id, show_boxes=show_boxes)
-            if jpeg_bytes and jpeg_bytes != last_sent_bytes:
-                await websocket.send_bytes(jpeg_bytes)
-                last_sent_bytes = jpeg_bytes
-            await asyncio.sleep(0.06)
-    except (WebSocketDisconnect, asyncio.CancelledError, Exception):
-        pass
-
 @router.get("/{camera_id}/thumbnail")
 async def get_camera_thumbnail(
     camera_id: str,
-    show_boxes: bool = Query(True)
+    show_boxes: bool = Query(True),
+    _: Dict[str, Any] = Depends(get_current_user)
 ):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
@@ -255,7 +249,7 @@ async def get_camera_thumbnail(
     )
 
 @router.post("/{camera_id}/snapshot")
-async def take_camera_snapshot(camera_id: str, _: Dict[str, Any] = Depends(get_current_user)):
+async def take_camera_snapshot(camera_id: str, _: Dict[str, Any] = Depends(require_operator)):
     cid = validate_safe_id(camera_id, "Camera ID")
     if cid not in stream_manager.active_streams:
         raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
@@ -267,7 +261,7 @@ async def take_camera_snapshot(camera_id: str, _: Dict[str, Any] = Depends(get_c
 
     timestamp_str = time.strftime("%Y%m%d_%H%M%S")
     filename = f"{cid}_{timestamp_str}.jpg"
-    file_path = os.path.join(SNAPSHOT_DIR, filename)
+    file_path = os.path.join(settings.SNAPSHOT_DIR, filename)
 
     success = cv2.imwrite(file_path, latest_frame)
     if not success:
@@ -282,25 +276,3 @@ async def take_camera_snapshot(camera_id: str, _: Dict[str, Any] = Depends(get_c
         "download_url": download_url,
         "timestamp": time.time()
     }
-
-@router.get("/{camera_id}/snapshots")
-async def list_camera_snapshots(camera_id: str):
-    cid = validate_safe_id(camera_id, "Camera ID")
-    if not os.path.exists(SNAPSHOT_DIR):
-        return []
-
-    cam_snapshots = []
-    for f in os.listdir(SNAPSHOT_DIR):
-        if f.startswith(cid) and f.endswith(".jpg"):
-            full_p = os.path.join(SNAPSHOT_DIR, f)
-            stat = os.stat(full_p)
-            cam_snapshots.append({
-                "filename": f,
-                "camera_id": cid,
-                "download_url": f"/api/v1/cameras/snapshots/download/{f}",
-                "timestamp": stat.st_mtime,
-                "size_bytes": stat.st_size
-            })
-    cam_snapshots.sort(key=lambda x: x["timestamp"], reverse=True)
-    return cam_snapshots
-

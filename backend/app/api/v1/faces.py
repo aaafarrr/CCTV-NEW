@@ -1,3 +1,4 @@
+import os
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -6,7 +7,8 @@ from sqlalchemy.future import select
 from app.core.database import get_db
 from app.models.face import PersonIdentity
 from app.core.qdrant_client import vector_service
-from app.core.security import validate_safe_id, get_current_user
+from app.core.security import validate_safe_id, get_current_user, require_admin
+from app.core.config import settings
 
 router = APIRouter(prefix="/faces", tags=["Face Gallery"])
 
@@ -16,7 +18,7 @@ class PersonUpdate(BaseModel):
     notes: Optional[str] = None
 
 @router.get("/people-clusters", response_model=List[Dict[str, Any]])
-async def get_people_clusters(db: AsyncSession = Depends(get_db)):
+async def get_people_clusters(_: Dict[str, Any] = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PersonIdentity).order_by(PersonIdentity.last_seen.desc()))
     persons = result.scalars().all()
 
@@ -25,17 +27,22 @@ async def get_people_clusters(db: AsyncSession = Depends(get_db)):
         clusters.append({
             "person_id": p.id,
             "name": p.name,
-            "thumbnail_url": p.thumbnail_url or "/media/faces/default_face.png",
+            "thumbnail_url": p.thumbnail_url or "",
             "is_watchlist": p.is_watchlist,
             "appearance_count": p.appearance_count,
             "notes": p.notes or "",
-            "last_seen_camera": getattr(p, "last_seen_camera", None) or "Kamera Utama (Lobby)",
+            "last_seen_camera": getattr(p, "last_seen_camera", None) or "Area Pengawasan",
             "last_seen_timestamp": p.last_seen.timestamp() if p.last_seen else 0
         })
     return clusters
 
 @router.put("/people-clusters/{person_id}")
-async def update_person_identity(person_id: str, payload: PersonUpdate, _: Dict[str, Any] = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def update_person_identity(
+    person_id: str,
+    payload: PersonUpdate,
+    _: Dict[str, Any] = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
     pid = validate_safe_id(person_id, "Person ID")
     result = await db.execute(select(PersonIdentity).where(PersonIdentity.id == pid))
     person = result.scalars().first()
@@ -51,16 +58,29 @@ async def update_person_identity(person_id: str, payload: PersonUpdate, _: Dict[
     return {"status": "success", "message": "Identitas berhasil diperbarui", "person_id": pid}
 
 @router.delete("/people-clusters/{person_id}")
-async def delete_person_identity(person_id: str, _: Dict[str, Any] = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def delete_person_identity(
+    person_id: str,
+    _: Dict[str, Any] = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
     pid = validate_safe_id(person_id, "Person ID")
     result = await db.execute(select(PersonIdentity).where(PersonIdentity.id == pid))
     person = result.scalars().first()
     if not person:
         raise HTTPException(status_code=404, detail="Identitas wajah tidak ditemukan")
 
+    # Delete photo from disk if present
+    if person.thumbnail_url:
+        filename = os.path.basename(person.thumbnail_url)
+        path = os.path.join(settings.FACES_DIR, filename)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
     await db.delete(person)
     await db.commit()
-    vector_service.delete_face_embedding(pid)
+    vector_service.delete_person(pid)
 
-    return {"status": "success", "message": f"Identitas {pid} berhasil dihapus dari SQL & Qdrant"}
-
+    return {"status": "success", "message": f"Identitas {pid} berhasil dihapus"}

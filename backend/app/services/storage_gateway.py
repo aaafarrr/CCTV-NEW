@@ -3,205 +3,165 @@ import json
 import time
 import uuid
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+import boto3
+from botocore.config import Config
+from app.core.config import settings
 
 logger = logging.getLogger("cctv_new.storage_gateway")
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-STORAGE_DIR = os.path.join(BASE_DIR, "storage")
-CLOUD_CONFIG_PATH = os.path.join(STORAGE_DIR, "cloud_pool.json")
+CLOUD_CONFIG_PATH = os.path.join(settings.STORAGE_DIR, "cloud_config.json")
 
-class StorageGatewayService:
+class ProductionStorageGateway:
     """
-    Multi-Cloud Storage Pooling & Auto-Tiering Gateway (Ref: Clospol).
-    Aggregates local NVMe rolling buffers with Cloud Providers (Google Drive, OneDrive, S3/R2/MinIO).
+    Production Multi-Tier Cloud Storage Gateway using real boto3 client for
+    AWS S3, Cloudflare R2, MinIO, or Wasabi object storage.
     """
     def __init__(self):
-        self.providers: List[Dict[str, Any]] = []
+        self.s3_client = None
         self.policy: Dict[str, Any] = {}
         self.sync_jobs: List[Dict[str, Any]] = []
-        self._load_state()
+        self._load_config()
+        self._init_s3_client()
 
-    def _load_state(self):
-        os.makedirs(STORAGE_DIR, exist_ok=True)
+    def _load_config(self):
         if os.path.exists(CLOUD_CONFIG_PATH):
             try:
                 with open(CLOUD_CONFIG_PATH, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    self.providers = data.get("providers", [])
                     self.policy = data.get("policy", {})
                     self.sync_jobs = data.get("sync_jobs", [])
                     return
             except Exception as e:
-                logger.error(f"Error loading cloud_pool.json: {e}")
+                logger.error(f"Error loading cloud_config.json: {e}")
 
-        self.providers = [
-            {
-                "id": "prov_local_nvme",
-                "name": "Local NVMe Rolling Buffer",
-                "type": "LOCAL_DISK",
-                "endpoint": "./storage/snapshots & ./media",
-                "tier": "HOT (Tier 1)",
-                "quota_gb": 500.0,
-                "used_gb": 42.8,
-                "status": "CONNECTED",
-                "auto_sync": True
-            },
-            {
-                "id": "prov_gdrive_corp",
-                "name": "Google Drive Enterprise Archive",
-                "type": "GOOGLE_DRIVE",
-                "endpoint": "gdrive://cctv-security-vault/2026",
-                "tier": "WARM (Tier 2)",
-                "quota_gb": 2000.0,
-                "used_gb": 318.4,
-                "status": "CONNECTED",
-                "auto_sync": True
-            },
-            {
-                "id": "prov_s3_r2",
-                "name": "Cloudflare R2 / S3 Object Pool",
-                "type": "S3_COMPATIBLE",
-                "endpoint": "https://s3.ap-southeast-1.r2.cloudflarestorage.com/cctv-new",
-                "tier": "COLD (Tier 3)",
-                "quota_gb": 5000.0,
-                "used_gb": 1120.5,
-                "status": "CONNECTED",
-                "auto_sync": True
-            },
-            {
-                "id": "prov_onedrive_backup",
-                "name": "Microsoft OneDrive SecOps",
-                "type": "ONEDRIVE",
-                "endpoint": "onedrive://Security-Incidents-Backup",
-                "tier": "WARM (Tier 2)",
-                "quota_gb": 1000.0,
-                "used_gb": 145.0,
-                "status": "STANDBY",
-                "auto_sync": False
-            }
-        ]
+        # Default policy
         self.policy = {
-            "local_retention_hours": 48,
+            "local_retention_days": 7,
             "cloud_retention_days": 90,
-            "pre_event_buffer_sec": 5,
-            "post_event_buffer_sec": 10,
-            "auto_tiering_enabled": True,
-            "sync_on_severity": ["CRITICAL", "WARNING"],
-            "routing_strategy": "WEIGHTED_FAILOVER"
+            "auto_sync_critical_events": True,
+            "s3_bucket": settings.S3_BUCKET,
+            "s3_endpoint_url": settings.S3_ENDPOINT_URL,
+            "s3_region": settings.S3_REGION,
+            "s3_prefix": settings.S3_PREFIX,
         }
-        self.sync_jobs = [
-            {
-                "id": "job_init_01",
-                "filename": "cam_1_intrusion_vault_clip.mp4",
-                "source_camera": "Kamera Utama (Lobby)",
-                "target_provider": "Google Drive Enterprise Archive",
-                "size_mb": 14.2,
-                "status": "COMPLETED",
-                "timestamp": time.time() - 900
-            },
-            {
-                "id": "job_init_02",
-                "filename": "cam_2_loitering_parking_clip.mp4",
-                "source_camera": "Kamera Area Parkir",
-                "target_provider": "Cloudflare R2 / S3 Object Pool",
-                "size_mb": 22.6,
-                "status": "COMPLETED",
-                "timestamp": time.time() - 320
-            }
-        ]
-        self._save_state()
+        self.sync_jobs = []
+        self._save_config()
 
-    def _save_state(self):
-        os.makedirs(STORAGE_DIR, exist_ok=True)
+    def _save_config(self):
         try:
             with open(CLOUD_CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump({
-                    "providers": self.providers,
                     "policy": self.policy,
                     "sync_jobs": self.sync_jobs[:50]
                 }, f, indent=2)
         except Exception as e:
-            logger.error(f"Error saving cloud_pool.json: {e}")
+            logger.error(f"Error saving cloud_config.json: {e}")
 
-    def get_pool_overview(self) -> Dict[str, Any]:
-        total_quota = sum(float(p.get("quota_gb", 0)) for p in self.providers)
-        total_used = sum(float(p.get("used_gb", 0)) for p in self.providers)
-        connected_count = sum(1 for p in self.providers if p.get("status") == "CONNECTED")
+    def _init_s3_client(self):
+        bucket = self.policy.get("s3_bucket") or settings.S3_BUCKET
+        endpoint = self.policy.get("s3_endpoint_url") or settings.S3_ENDPOINT_URL
+        access_key = settings.S3_ACCESS_KEY
+        secret_key = settings.S3_SECRET_KEY
+        region = self.policy.get("s3_region") or settings.S3_REGION or "auto"
 
-        # Count real local files in storage/snapshots and media/faces
-        snap_dir = os.path.join(STORAGE_DIR, "snapshots")
-        local_files_count = len(os.listdir(snap_dir)) if os.path.exists(snap_dir) else 0
+        if bucket and access_key and secret_key:
+            try:
+                cfg = Config(signature_version='s3v4', retries={'max_attempts': 3})
+                self.s3_client = boto3.client(
+                    's3',
+                    endpoint_url=endpoint if endpoint else None,
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
+                    region_name=region if region != "auto" else None,
+                    config=cfg
+                )
+                logger.info(f"S3 Object Storage client connected (bucket: {bucket})")
+            except Exception as e:
+                logger.error(f"Failed to initialize S3 client: {e}")
+                self.s3_client = None
+        else:
+            self.s3_client = None
+
+    def get_overview(self) -> Dict[str, Any]:
+        snap_dir = settings.SNAPSHOT_DIR
+        local_files = [f for f in os.listdir(snap_dir) if f.endswith(('.jpg', '.png', '.mp4'))] if os.path.exists(snap_dir) else []
+        local_size_mb = sum(os.path.getsize(os.path.join(snap_dir, f)) for f in local_files) / (1024 * 1024)
+
+        has_s3 = self.s3_client is not None
+        bucket_name = self.policy.get("s3_bucket") or settings.S3_BUCKET or "(Belum Dikonfigurasi)"
 
         return {
-            "total_quota_gb": round(total_quota, 1),
-            "total_used_gb": round(total_used, 1),
-            "free_gb": round(max(0.0, total_quota - total_used), 1),
-            "usage_percent": round((total_used / total_quota) * 100, 1) if total_quota > 0 else 0.0,
-            "connected_providers": connected_count,
-            "total_providers": len(self.providers),
-            "local_snapshots_count": local_files_count,
-            "providers": self.providers,
+            "s3_configured": has_s3,
+            "s3_bucket": bucket_name,
+            "s3_endpoint": self.policy.get("s3_endpoint_url") or settings.S3_ENDPOINT_URL or "AWS Default",
+            "local_snapshots_count": len(local_files),
+            "local_used_mb": round(local_size_mb, 2),
             "policy": self.policy,
             "recent_jobs": self.sync_jobs[:20]
         }
 
-    def add_provider(self, name: str, ptype: str, endpoint: str, tier: str, quota_gb: float) -> Dict[str, Any]:
-        new_prov = {
-            "id": f"prov_{uuid.uuid4().hex[:8]}",
-            "name": name,
-            "type": ptype,
-            "endpoint": endpoint,
-            "tier": tier,
-            "quota_gb": float(quota_gb),
-            "used_gb": 0.0,
-            "status": "CONNECTED",
-            "auto_sync": True
-        }
-        self.providers.append(new_prov)
-        self._save_state()
-        return new_prov
-
-    def toggle_provider(self, provider_id: str) -> Dict[str, Any]:
-        for p in self.providers:
-            if p["id"] == provider_id:
-                p["status"] = "STANDBY" if p["status"] == "CONNECTED" else "CONNECTED"
-                p["auto_sync"] = p["status"] == "CONNECTED"
-                self._save_state()
-                return p
-        raise KeyError("Provider not found")
-
-    def delete_provider(self, provider_id: str) -> bool:
-        before = len(self.providers)
-        self.providers = [p for p in self.providers if p["id"] != provider_id]
-        if len(self.providers) < before:
-            self._save_state()
-            return True
-        return False
-
     def update_policy(self, new_policy: Dict[str, Any]) -> Dict[str, Any]:
         self.policy.update(new_policy)
-        self._save_state()
+        self._save_config()
+        self._init_s3_client()
         return self.policy
 
-    def trigger_cloud_sync(self, camera_name: str = "Semua Kamera Aktif", reason: str = "Manual Pool Sync") -> Dict[str, Any]:
-        active_targets = [p for p in self.providers if p.get("status") == "CONNECTED" and p.get("type") != "LOCAL_DISK"]
-        target_name = active_targets[0]["name"] if active_targets else "Local NVMe Rolling Buffer"
-        job = {
-            "id": f"job_{uuid.uuid4().hex[:8]}",
-            "filename": f"archive_bundle_{time.strftime('%Y%m%d_%H%M%S')}.mp4",
-            "source_camera": camera_name,
-            "target_provider": target_name,
-            "size_mb": round(12.4 + (time.time() % 15), 1),
-            "status": "COMPLETED",
-            "reason": reason,
-            "timestamp": time.time()
-        }
+    def upload_file_to_s3(self, local_path: str, remote_filename: str, metadata: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        job_id = f"job_{uuid.uuid4().hex[:8]}"
+        file_size_mb = round(os.path.getsize(local_path) / (1024 * 1024), 2) if os.path.exists(local_path) else 0.0
+
+        if not self.s3_client:
+            job = {
+                "id": job_id,
+                "filename": remote_filename,
+                "size_mb": file_size_mb,
+                "status": "LOCAL_ONLY",
+                "reason": "S3 Belum dikonfigurasi (.env atau Settings)",
+                "timestamp": time.time()
+            }
+            self.sync_jobs.insert(0, job)
+            self._save_config()
+            return job
+
+        bucket = self.policy.get("s3_bucket") or settings.S3_BUCKET
+        prefix = self.policy.get("s3_prefix", "cctv")
+        s3_key = f"{prefix}/{remote_filename}".replace("//", "/")
+
+        try:
+            extra_args = {}
+            if remote_filename.endswith(".jpg") or remote_filename.endswith(".jpeg"):
+                extra_args["ContentType"] = "image/jpeg"
+            elif remote_filename.endswith(".mp4"):
+                extra_args["ContentType"] = "video/mp4"
+
+            if metadata:
+                extra_args["Metadata"] = {k: str(v) for k, v in metadata.items()}
+
+            self.s3_client.upload_file(local_path, bucket, s3_key, ExtraArgs=extra_args)
+            job = {
+                "id": job_id,
+                "filename": remote_filename,
+                "s3_key": s3_key,
+                "bucket": bucket,
+                "size_mb": file_size_mb,
+                "status": "COMPLETED",
+                "timestamp": time.time()
+            }
+            logger.info(f"Successfully uploaded {local_path} to s3://{bucket}/{s3_key}")
+        except Exception as e:
+            logger.error(f"S3 upload error for {remote_filename}: {e}")
+            job = {
+                "id": job_id,
+                "filename": remote_filename,
+                "size_mb": file_size_mb,
+                "status": "FAILED",
+                "error": str(e),
+                "timestamp": time.time()
+            }
+
         self.sync_jobs.insert(0, job)
-        if active_targets:
-            active_targets[0]["used_gb"] = round(float(active_targets[0]["used_gb"]) + 0.02, 2)
-        self._save_state()
+        self._save_config()
         return job
 
-storage_gateway = StorageGatewayService()
-
+storage_gateway = ProductionStorageGateway()

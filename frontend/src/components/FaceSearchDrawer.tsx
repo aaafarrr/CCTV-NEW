@@ -134,20 +134,9 @@ export const FaceSearchDrawer: React.FC<FaceSearchDrawerProps> = ({ open, onClos
         </div>
 
         <Card size="small" style={{ background: ENTERPRISE_TOKENS.bgSubtle }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <Text strong style={{ fontSize: 12 }}>Uji Cepat dengan Sampel Wajah Terdaftar:</Text>
-          </div>
-          <Space wrap>
-            <Button size="small" onClick={() => handleQuickSampleSearch('/media/faces/person_dpo_01.jpg', 'Target_DPO_A09')}>
-              🎯 Sampel Target DPO #A09
-            </Button>
-            <Button size="small" onClick={() => handleQuickSampleSearch('/media/faces/person_vip_01.jpg', 'Budi_Santoso_VIP')}>
-              👔 Sampel Direktur VIP
-            </Button>
-            <Button size="small" onClick={() => handleQuickSampleSearch('/media/faces/person_staff_02.jpg', 'Siti_SecOps')}>
-              🛡️ Sampel Kepala Keamanan
-            </Button>
-          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Sistem mencocokkan vektor embedding 512-dimensi InsightFace dengan database Qdrant secara real-time.
+          </Text>
         </Card>
 
         <div>
