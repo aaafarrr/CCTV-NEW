@@ -26,9 +26,11 @@ os.makedirs(settings.RECORDINGS_DIR, exist_ok=True)
 os.makedirs(settings.SNAPSHOTS_DIR, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.MEDIA_DIR), name="media")
 
-app.include_router(auth.router, prefix=settings.API_V1_STR)
-app.include_router(cctv.router, prefix=settings.API_V1_STR)
-app.include_router(google_drive_api.router, prefix=settings.API_V1_STR)
+# Support both /api and /api/v1 prefixes seamlessly
+for prefix in [settings.API_V1_STR, "/api/v1"]:
+    app.include_router(auth.router, prefix=prefix)
+    app.include_router(cctv.router, prefix=prefix)
+    app.include_router(google_drive_api.router, prefix=prefix)
 
 @app.on_event("startup")
 async def startup_event():

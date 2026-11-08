@@ -20,13 +20,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
   const checkSetupStatus = async () => {
     try {
-      const res = await fetch('/api/v1/auth/status');
+      const res = await fetch('/api/auth/status');
       if (res.ok) {
         const data = await res.json();
         setIsConfigured(data.is_configured);
+      } else {
+        setIsConfigured(false);
       }
     } catch {
-      setIsConfigured(true);
+      setIsConfigured(false);
     }
   };
 
@@ -46,7 +48,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       formBody.append('username', username.trim());
       formBody.append('password', password);
 
-      const res = await fetch('/api/v1/auth/login', {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: formBody.toString(),
@@ -79,7 +81,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/v1/auth/setup-admin', {
+      const res = await fetch('/api/auth/setup-admin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
